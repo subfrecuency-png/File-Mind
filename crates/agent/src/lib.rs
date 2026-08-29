@@ -1,7 +1,12 @@
 //! Agent library: the scan/hash pipeline and platform adapter selection.
 //! The `filemind-agent` binary and the `filemind` CLI both build on this.
 
+/// Changes on every compile of this crate; the CLI compares it with a running
+/// agent's to detect a stale daemon after a rebuild.
+pub const BUILD_ID: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FILEMIND_BUILD"));
+
 pub mod analysis;
+pub mod classifier;
 pub mod fixture;
 pub mod incremental;
 pub mod pipeline;

@@ -58,14 +58,25 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
             max_wall: Some(sched.hash_budget),
         },
     )?;
+    let c = crate::classifier::classify_pending(
+        db,
+        crate::classifier::ClassifyOpts {
+            duty_cycle: sched.hash_duty_cycle,
+            max_wall: Some(sched.hash_budget),
+            names_only: false,
+        },
+    )?;
     let a = crate::analysis::run(db)?;
     Ok(format!(
-        "roots {}  files {}  changes {}  hashed {} (+{} pending)  health {}  dup groups {} ({})  version chains {}  suggestions {}",
+        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  health {}  dup groups {} ({})  version chains {}  suggestions {}",
         scans.len(),
         files,
         changed,
         h.hashed,
         h.remaining,
+        c.classified,
+        c.remaining,
+        c.sensitive,
         a.health.score,
         a.duplicate_groups,
         filemind_core::health::human(a.duplicate_bytes),

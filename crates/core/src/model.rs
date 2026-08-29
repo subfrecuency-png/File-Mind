@@ -47,7 +47,7 @@ pub struct FileRecord {
     pub status: FileStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Document,
@@ -62,6 +62,58 @@ pub enum Category {
     Media,
     Data,
     Other,
+}
+
+impl Category {
+    pub const ALL: [Category; 12] = [
+        Category::Document,
+        Category::Invoice,
+        Category::Contract,
+        Category::Photo,
+        Category::Screenshot,
+        Category::Design,
+        Category::Code,
+        Category::Archive,
+        Category::Installer,
+        Category::Media,
+        Category::Data,
+        Category::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Category::Document => "document",
+            Category::Invoice => "invoice",
+            Category::Contract => "contract",
+            Category::Photo => "photo",
+            Category::Screenshot => "screenshot",
+            Category::Design => "design",
+            Category::Code => "code",
+            Category::Archive => "archive",
+            Category::Installer => "installer",
+            Category::Media => "media",
+            Category::Data => "data",
+            Category::Other => "other",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Category> {
+        Category::ALL
+            .iter()
+            .copied()
+            .find(|c| c.as_str() == s.to_ascii_lowercase())
+    }
+}
+
+impl ClassificationSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClassificationSource::Rule => "rule",
+            ClassificationSource::Ml => "ml",
+            ClassificationSource::Llm => "llm",
+            ClassificationSource::User => "user",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

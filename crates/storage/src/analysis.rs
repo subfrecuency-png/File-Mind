@@ -16,19 +16,6 @@ use std::path::{Path, PathBuf};
 
 const STALE_DAYS: i64 = 90;
 
-/// Extensions we can name a category for (Phase 4 replaces this with the classifier).
-const KNOWN_EXTS: &[&str] = &[
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "key", "pages", "numbers", "txt", "md",
-    "rtf", "csv", "json", "xml", "yaml", "yml", "toml", "html", "htm", "css", "js", "ts", "tsx",
-    "jsx", "py", "rs", "go", "java", "c", "cpp", "h", "swift", "kt", "rb", "php", "sh", "sql",
-    "ipynb", "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp", "svg",
-    "psd", "ai", "sketch", "fig", "raw", "cr2", "nef", "dng", "mp4", "mov", "m4v", "avi", "mkv",
-    "webm", "mp3", "m4a", "wav", "aiff", "flac", "ogg", "zip", "tar", "gz", "tgz", "bz2", "7z",
-    "rar", "dmg", "pkg", "iso", "exe", "msi", "app", "apk", "epub", "mobi", "ttf", "otf", "woff",
-    "woff2", "log", "db", "sqlite", "eml", "ics", "vcf", "lbrn2", "blend", "obj", "fbx", "stl",
-    "glb", "gltf", "uasset", "aep", "prproj", "drp", "wmv", "flv",
-];
-
 #[derive(Debug, Clone)]
 pub struct DupGroup {
     pub group_id: i64,
@@ -249,24 +236,24 @@ impl Db {
              WHERE vm.file_id <> vc.canonical_file_id AND f.status='present' {scope}",
         )? as u64;
 
-        // naming + unclassified need per-file rules; one pass over names.
+        // naming needs a per-file rule; one pass over names.
         let mut st = self.conn.prepare(&format!(
-            "SELECT name, ext FROM files WHERE kind='file' AND status='present' {scope}"
+            "SELECT name FROM files WHERE kind='file' AND status='present' {scope}"
         ))?;
         let mut unnamed = 0u64;
-        let mut unclassified = 0u64;
-        for row in st.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-        })? {
-            let (name, ext) = row?;
-            if looks_unnamed(&name) {
+        for row in st.query_map([], |r| r.get::<_, String>(0))? {
+            if looks_unnamed(&row?) {
                 unnamed += 1;
             }
-            match ext.as_deref() {
-                Some(e) if KNOWN_EXTS.contains(&e) => {}
-                _ => unclassified += 1,
-            }
         }
+        // unclassified = classified as Other, or not classified yet but of an unknown extension
+        let unclassified = q1(
+            "SELECT COUNT(*) FROM files f WHERE f.kind='file' AND f.status='present' {scope}
+             AND COALESCE(
+                 (SELECT category FROM classifications WHERE file_id = f.file_id AND source = 'user'),
+                 (SELECT category FROM classifications WHERE file_id = f.file_id ORDER BY ts DESC LIMIT 1),
+                 'other') = 'other'",
+        )? as u64;
 
         Ok(HealthInputs {
             files,

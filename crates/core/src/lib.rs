@@ -10,6 +10,8 @@
 //! transaction manager.
 
 pub mod adapter;
+pub mod classify;
+pub mod extract;
 pub mod health;
 pub mod mode;
 pub mod model;

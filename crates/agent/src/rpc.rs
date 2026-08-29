@@ -54,7 +54,9 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
     match method {
-        "ping" => Ok(json!({"pong": true, "version": env!("CARGO_PKG_VERSION")})),
+        "ping" => Ok(
+            json!({"pong": true, "version": env!("CARGO_PKG_VERSION"), "build": crate::BUILD_ID}),
+        ),
         "status" => {
             let c = db.counts()?;
             let roots: Vec<Value> = db
@@ -225,6 +227,112 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 .and_then(Value::as_i64)
                 .ok_or_else(|| anyhow::anyhow!("id required"))?;
             Ok(json!({"ok": db.set_suggestion_state(id, "dismissed")?}))
+        }
+        "classify.run" => {
+            let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
+            let minutes = p.get("minutes").and_then(Value::as_u64);
+            let names_only = p
+                .get("names_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let o = crate::classifier::classify_pending(
+                &db,
+                crate::classifier::ClassifyOpts {
+                    duty_cycle: duty,
+                    max_wall: minutes.map(|m| Duration::from_secs(m * 60)),
+                    names_only,
+                },
+            )?;
+            Ok(
+                json!({"classified": o.classified, "extracted": o.extracted, "sensitive": o.sensitive,
+                      "remaining": o.remaining, "elapsed_ms": o.elapsed_ms}),
+            )
+        }
+        "classify.show" => {
+            let path = PathBuf::from(
+                p.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("path required"))?,
+            );
+            match db.classification_of(&path)? {
+                Some((c, sens)) => Ok(
+                    json!({"path": path, "indexed": true, "classification": c, "sensitive": sens}),
+                ),
+                None => {
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let rules: Vec<_> = db.list_rules()?.into_iter().map(|(_, r)| r).collect();
+                    let (c, sens, _) = crate::classifier::classify_path(&path, size, &rules, false);
+                    Ok(
+                        json!({"path": path, "indexed": false, "classification": c, "sensitive": sens}),
+                    )
+                }
+            }
+        }
+        "classify.set" => {
+            let path = PathBuf::from(
+                p.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("path required"))?,
+            );
+            let cat = p
+                .get("category")
+                .and_then(Value::as_str)
+                .and_then(filemind_core::model::Category::parse)
+                .ok_or_else(|| anyhow::anyhow!("category required (document, invoice, contract, photo, screenshot, design, code, archive, installer, media, data, other)"))?;
+            let scope = p.get("scope").and_then(Value::as_str).unwrap_or("file");
+            let mut rule_id = None;
+            match scope {
+                "folder" => {
+                    let prefix = path
+                        .parent()
+                        .map(|d| d.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    rule_id =
+                        Some(db.add_rule(&filemind_core::classify::UserRule::PathPrefix {
+                            prefix,
+                            category: cat,
+                        })?);
+                }
+                "ext" => {
+                    let ext = path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    rule_id = Some(db.add_rule(&filemind_core::classify::UserRule::Ext {
+                        ext,
+                        category: cat,
+                    })?);
+                }
+                "name" => {
+                    let token = p
+                        .get("token")
+                        .and_then(Value::as_str)
+                        .map(|t| t.to_lowercase())
+                        .ok_or_else(|| anyhow::anyhow!("token required for scope=name"))?;
+                    rule_id = Some(db.add_rule(
+                        &filemind_core::classify::UserRule::NameContains {
+                            token,
+                            category: cat,
+                        },
+                    )?);
+                }
+                _ => {}
+            }
+            let ok = db.set_user_category(&path, cat)?;
+            Ok(json!({"ok": ok || rule_id.is_some(), "rule_id": rule_id}))
+        }
+        "categories" => Ok(json!({
+            "categories": db.category_counts()?.into_iter().map(|(c, n, b)| json!({"category": c, "files": n, "bytes": b})).collect::<Vec<_>>(),
+            "sensitive": db.sensitive_count()?,
+            "pending": db.count_classify_pending()?,
+            "rules": db.list_rules()?.into_iter().map(|(id, r)| json!({"id": id, "rule": format!("{r:?}")})).collect::<Vec<_>>()
+        })),
+        "rules.remove" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!({"ok": db.remove_rule(id)?}))
         }
         other => anyhow::bail!("unknown method {other}"),
     }

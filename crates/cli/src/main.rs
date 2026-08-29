@@ -72,6 +72,22 @@ enum Cmd {
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
+    /// Classify files and extract searchable text (throttled).
+    Classify {
+        #[command(subcommand)]
+        cmd: Option<ClassifyCmd>,
+        /// Busy fraction of wall time, 0.05–1.0.
+        #[arg(long, default_value_t = 0.2)]
+        duty: f32,
+        /// Stop after this many minutes.
+        #[arg(long)]
+        minutes: Option<u64>,
+        /// Names and extensions only, no text extraction (fast first pass).
+        #[arg(long)]
+        names_only: bool,
+    },
+    /// How many files of each category, sensitive files, pending, and your rules.
+    Categories,
     /// Observe-mode suggestions. Nothing is ever executed from here.
     Suggest {
         #[arg(long, default_value_t = 20)]
@@ -102,6 +118,26 @@ enum RootsCmd {
     Add { path: PathBuf },
     /// Forget a folder and its index entries. Files on disk are untouched.
     Remove { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum ClassifyCmd {
+    /// Show how one file was classified and why.
+    Show { path: PathBuf },
+    /// Correct a file's category. --scope folder|ext|name turns it into a rule.
+    Set {
+        path: PathBuf,
+        /// document, invoice, contract, photo, screenshot, design, code, archive, installer, media, data, other
+        category: String,
+        /// file (default) | folder | ext | name
+        #[arg(long, default_value = "file")]
+        scope: String,
+        /// For --scope name: the name fragment the rule should match.
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Delete a rule by id (see `filemind categories`).
+    Forget { rule_id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -148,10 +184,25 @@ fn parse_mode(s: &str) -> Result<Mode, String> {
 }
 
 /// Connect to a running agent, if any. When it is running, commands go through
-/// it so there is a single writer and the watcher stays consistent.
+/// it so there is a single writer and the watcher stays consistent. A running
+/// agent from an older build is refused with a clear message.
 fn agent() -> Option<Client> {
     let path = filemind_storage::default_db_path().ok()?;
-    Client::connect(&path)
+    let mut c = Client::connect(&path)?;
+    match c.call("ping", json!({})) {
+        Ok(v) => {
+            let build = v.get("build").and_then(Value::as_str).unwrap_or("");
+            if build != filemind_agent::BUILD_ID {
+                eprintln!(
+                    "note: the running agent is from an older build ({}); restart it with `filemind agent stop` then `filemind agent start`. Working on the database directly for now.",
+                    if build.is_empty() { "unknown" } else { build }
+                );
+                return None;
+            }
+            Some(c)
+        }
+        Err(_) => None,
+    }
 }
 
 fn print_scan(v: &Value) {
@@ -679,6 +730,204 @@ fn main() -> Result<()> {
                 }
             }
         },
+
+        Cmd::Classify {
+            cmd,
+            duty,
+            minutes,
+            names_only,
+        } => {
+            match cmd {
+                None => {
+                    let v = if let Some(mut a) = agent() {
+                        a.call(
+                            "classify.run",
+                            json!({"duty": duty, "minutes": minutes, "names_only": names_only}),
+                        )?
+                    } else {
+                        let (_, db) = open_db()?;
+                        let o = filemind_agent::classifier::classify_pending(
+                            &db,
+                            filemind_agent::classifier::ClassifyOpts {
+                                duty_cycle: duty,
+                                max_wall: minutes.map(|m| Duration::from_secs(m * 60)),
+                                names_only,
+                            },
+                        )?;
+                        json!({"classified": o.classified, "extracted": o.extracted, "sensitive": o.sensitive, "remaining": o.remaining, "elapsed_ms": o.elapsed_ms})
+                    };
+                    let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+                    println!(
+                    "classified {} files ({} with text extracted, {} sensitive) in {:.1}s  still pending {}",
+                    g("classified"),
+                    g("extracted"),
+                    g("sensitive"),
+                    g("elapsed_ms") as f64 / 1000.0,
+                    g("remaining")
+                );
+                }
+                Some(ClassifyCmd::Show { path }) => {
+                    let path = path.canonicalize()?;
+                    let v = if let Some(mut a) = agent() {
+                        a.call("classify.show", json!({"path": path}))?
+                    } else {
+                        let (_, db) = open_db()?;
+                        match db.classification_of(&path)? {
+                            Some((c, sens)) => {
+                                json!({"indexed": true, "classification": c, "sensitive": sens})
+                            }
+                            None => {
+                                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                let rules: Vec<_> =
+                                    db.list_rules()?.into_iter().map(|(_, r)| r).collect();
+                                let (c, sens, _) = filemind_agent::classifier::classify_path(
+                                    &path, size, &rules, false,
+                                );
+                                json!({"indexed": false, "classification": c, "sensitive": sens})
+                            }
+                        }
+                    };
+                    let c = &v["classification"];
+                    println!("{}", path.display());
+                    println!(
+                        "category    {}  ({:.0}% via {}){}",
+                        c["category"].as_str().unwrap_or("?"),
+                        c["confidence"].as_f64().unwrap_or(0.0) * 100.0,
+                        c["source"].as_str().unwrap_or("?"),
+                        if v["indexed"].as_bool() == Some(true) {
+                            ""
+                        } else {
+                            "  [not indexed — classified on the spot]"
+                        }
+                    );
+                    for sgn in c["signals"].as_array().cloned().unwrap_or_default() {
+                        println!("  · {}", sgn.as_str().unwrap_or(""));
+                    }
+                    if let Some(s) = v["sensitive"].as_str() {
+                        println!("sensitive   yes ({s}) — never sent to any AI adapter, text not indexed");
+                    }
+                }
+                Some(ClassifyCmd::Set {
+                    path,
+                    category,
+                    scope,
+                    token,
+                }) => {
+                    let path = path.canonicalize().unwrap_or(path);
+                    let v = if let Some(mut a) = agent() {
+                        a.call("classify.set", json!({"path": path, "category": category, "scope": scope, "token": token}))?
+                    } else {
+                        let (_, db) = open_db()?;
+                        let cat = filemind_core::model::Category::parse(&category)
+                            .ok_or_else(|| anyhow::anyhow!("unknown category '{category}'"))?;
+                        let mut rule_id = None;
+                        match scope.as_str() {
+                            "folder" => {
+                                let prefix = path
+                                    .parent()
+                                    .map(|d| d.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                rule_id = Some(db.add_rule(
+                                    &filemind_core::classify::UserRule::PathPrefix {
+                                        prefix,
+                                        category: cat,
+                                    },
+                                )?);
+                            }
+                            "ext" => {
+                                let ext = path
+                                    .extension()
+                                    .map(|e| e.to_string_lossy().to_lowercase())
+                                    .unwrap_or_default();
+                                rule_id =
+                                    Some(db.add_rule(&filemind_core::classify::UserRule::Ext {
+                                        ext,
+                                        category: cat,
+                                    })?);
+                            }
+                            "name" => {
+                                let token = token
+                                    .clone()
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("--token is required with --scope name")
+                                    })?
+                                    .to_lowercase();
+                                rule_id = Some(db.add_rule(
+                                    &filemind_core::classify::UserRule::NameContains {
+                                        token,
+                                        category: cat,
+                                    },
+                                )?);
+                            }
+                            _ => {}
+                        }
+                        let ok = db.set_user_category(&path, cat)?;
+                        json!({"ok": ok || rule_id.is_some(), "rule_id": rule_id})
+                    };
+                    if v["ok"].as_bool() == Some(true) {
+                        match v["rule_id"].as_i64() {
+                        Some(id) => println!("set {} → {category}; rule #{id} will apply to matching files on the next classify pass", path.display()),
+                        None => println!("set {} → {category}", path.display()),
+                    }
+                    } else {
+                        bail!("{} is not in the index", path.display());
+                    }
+                }
+                Some(ClassifyCmd::Forget { rule_id }) => {
+                    let ok = if let Some(mut a) = agent() {
+                        a.call("rules.remove", json!({"id": rule_id}))?["ok"].as_bool()
+                            == Some(true)
+                    } else {
+                        let (_, db) = open_db()?;
+                        db.remove_rule(rule_id)?
+                    };
+                    if ok {
+                        println!("forgot rule #{rule_id}");
+                    } else {
+                        bail!("no rule #{rule_id}");
+                    }
+                }
+            }
+        }
+
+        Cmd::Categories => {
+            let v = if let Some(mut a) = agent() {
+                a.call("categories", json!({}))?
+            } else {
+                let (_, db) = open_db()?;
+                json!({
+                    "categories": db.category_counts()?.into_iter().map(|(c, n, b)| json!({"category": c, "files": n, "bytes": b})).collect::<Vec<_>>(),
+                    "sensitive": db.sensitive_count()?,
+                    "pending": db.count_classify_pending()?,
+                    "rules": db.list_rules()?.into_iter().map(|(id, r)| json!({"id": id, "rule": format!("{r:?}")})).collect::<Vec<_>>()
+                })
+            };
+            for c in v["categories"].as_array().cloned().unwrap_or_default() {
+                println!(
+                    "  {:<13} {:>8} files  {:>10}",
+                    c["category"].as_str().unwrap_or("?"),
+                    c["files"],
+                    human_bytes(c["bytes"].as_u64().unwrap_or(0))
+                );
+            }
+            println!();
+            println!(
+                "  sensitive     {} files (excluded from AI adapters and text search)",
+                v["sensitive"]
+            );
+            println!(
+                "  pending       {} files not yet classified — `filemind classify`",
+                v["pending"]
+            );
+            let rules = v["rules"].as_array().cloned().unwrap_or_default();
+            if !rules.is_empty() {
+                println!();
+                println!("  your rules:");
+                for r in rules {
+                    println!("    #{:<4} {}", r["id"], r["rule"].as_str().unwrap_or(""));
+                }
+            }
+        }
 
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Start => {

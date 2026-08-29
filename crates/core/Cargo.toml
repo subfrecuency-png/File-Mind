@@ -12,6 +12,8 @@ serde_json.workspace = true
 tracing.workspace = true
 blake3.workspace = true
 chrono.workspace = true
+pdf-extract.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

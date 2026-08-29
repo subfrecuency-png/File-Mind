@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 3 — the index talks back.** Live-watched inventory plus a health score, exact-duplicate groups, version-chain detection and Observe-mode suggestions (nothing is ever executed without approval). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 4 — it knows what things are.** Live-watched inventory, health score, duplicates, version chains, Observe-mode suggestions, and now a rule-based classifier with text extraction (PDF/DOCX/PPTX/XLSX/text/code) feeding full-content search, a sensitive-content detector, and corrections that become rules. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -37,6 +37,10 @@ filemind health                       # 0–100 score and what is costing points
 filemind dupes                        # exact-duplicate groups, keeper chosen
 filemind versions                     # report_v1 / report_v2 … chains, newest marked
 filemind suggest                      # what FileMind would do (observe mode: it never acts)
+filemind classify --minutes 5         # categorise + extract text (throttled); search then finds contents
+filemind categories                   # files per category, sensitive count, your rules
+filemind classify show <file>         # category, confidence, and the signals behind it
+filemind classify set <file> invoice --scope folder   # correct it; --scope folder|ext|name makes a rule
 filemind agent start                  # run the agent in the foreground (watcher + scheduler + socket)
 filemind agent install                # or: start filemind-agent at login (launchd)
 filemind agent status                 # is it running? watcher counters
