@@ -36,6 +36,15 @@ fn main() -> Result<()> {
         "filemind-agent starting"
     );
 
+    // Settle anything a previous process left half-done before doing anything else.
+    match filemind_agent::actions::recover_all(adapter.as_ref(), &db) {
+        Ok(v) if !v.is_empty() => {
+            tracing::warn!(recovered = v.len(), "unfinished transactions settled")
+        }
+        Ok(_) => {}
+        Err(e) => tracing::error!(error = %e, "recovery failed"),
+    }
+
     if once {
         return scheduler::run(adapter.as_ref(), &db, true);
     }
@@ -116,7 +125,7 @@ fn ctrlc_handler<F: Fn() + Send + Sync + 'static>(f: F) {
     std::thread::spawn(move || loop {
         if let Some(p) = &stop_file {
             if p.exists() {
-                let _ = std::fs::remove_file(p); // our own control file
+                let _ = std::fs::remove_file(p); // filemind:own-file (control file, never user data)
                 f();
                 return;
             }

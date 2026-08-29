@@ -32,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Core safety rule: the only deletion primitive is OsAdapter::move_to_trash.
+      # FileMind's own control files (socket, stop file) are annotated `filemind:own-file`.
       - run: |
-          if grep -rnE 'fs::(remove_file|remove_dir|remove_dir_all)\b' crates/core/src crates/agent/src crates/cli/src; then
+          if grep -rnE 'fs::(remove_file|remove_dir|remove_dir_all)\b' crates/core/src crates/agent/src crates/cli/src | grep -v 'filemind:own-file'; then
             echo "::error::Hard delete found outside the OS adapter layer"; exit 1; fi

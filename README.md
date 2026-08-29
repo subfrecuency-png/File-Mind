@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 5 — it knows what belongs together.** Project detection groups files into repos (marker files), project folders (descending through container folders like Clients/), and sessions/topics of loose files by when they were touched and what they are called; names you give projects survive re-analysis. Plus everything from Phase 4: Live-watched inventory, health score, duplicates, version chains, Observe-mode suggestions, and now a rule-based classifier with text extraction (PDF/DOCX/PPTX/XLSX/text/code) feeding full-content search, a sensitive-content detector, and corrections that become rules. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 6 — it can act, and take it back.** Suggestions become reversible transactions: a manifest is journaled before anything moves, every step is journaled around its disk operation, a crash mid-transaction is settled on next start by looking at the disk, and undo verifies content hashes so an edited file is never overwritten. Trash is the only way a file leaves its folder. Chaos-tested: 200+ simulated crashes at every step boundary, zero loss. Plus everything from Phase 5: Project detection groups files into repos (marker files), project folders (descending through container folders like Clients/), and sessions/topics of loose files by when they were touched and what they are called; names you give projects survive re-analysis. Plus everything from Phase 4: Live-watched inventory, health score, duplicates, version chains, Observe-mode suggestions, and now a rule-based classifier with text extraction (PDF/DOCX/PPTX/XLSX/text/code) feeding full-content search, a sensitive-content detector, and corrections that become rules. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -45,6 +45,11 @@ filemind projects                     # detected projects, most active first
 filemind project show 3               # a project's files, dates and category mix
 filemind project rename 3 "Calcium deal"
 filemind project of ~/Downloads/x.pdf # which project a file belongs to
+filemind mode assist                  # allow approved actions (observe = propose only, the default)
+filemind suggest plan 12              # exactly what applying #12 would do — touches nothing
+filemind suggest apply 12             # asks for confirmation, then runs it as a transaction
+filemind history                      # what FileMind has done; `history <txn>` shows the steps
+filemind undo txn_…                   # reverse it; edited/occupied files are left alone and reported
 filemind agent start                  # run the agent in the foreground (watcher + scheduler + socket)
 filemind agent install                # or: start filemind-agent at login (launchd)
 filemind agent status                 # is it running? watcher counters

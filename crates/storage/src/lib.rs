@@ -3,10 +3,12 @@
 pub mod analysis;
 pub mod classify;
 pub mod inventory;
+pub mod journal;
 pub mod projects;
 
 pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use inventory::{Root, UpsertStats};
+pub use journal::TxnSummary;
 pub use projects::ProjectRow;
 
 use anyhow::{Context, Result};

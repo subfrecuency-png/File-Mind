@@ -7,6 +7,7 @@
 
 mod notify_bridge;
 pub mod spotlight;
+pub mod trash;
 
 use chrono::{DateTime, TimeZone, Utc};
 use filemind_core::adapter::*;
@@ -97,11 +98,25 @@ impl OsAdapter for MacAdapter {
         spotlight::mdfind(query)
     }
 
-    fn move_to_trash(&self, _path: &Path) -> Result<TrashReceipt> {
-        // Phase 6: NSFileManager.trashItem via osascript or the `trash` crate.
-        Err(CoreError::Other(anyhow::anyhow!(
-            "trash not implemented yet (Phase 6)"
-        )))
+    fn move_to_trash(&self, path: &Path) -> Result<TrashReceipt> {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
+        trash::move_to_trash(&home, path)
+    }
+
+    fn trash_target(&self, path: &Path) -> Result<PathBuf> {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
+        trash::trash_target(&home, path)
+    }
+
+    fn move_to_trash_at(&self, path: &Path, target: &Path) -> Result<TrashReceipt> {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
+        trash::move_to_trash_at(&home, path, target)
     }
 
     fn rename_no_clobber(&self, from: &Path, to: &Path) -> Result<()> {

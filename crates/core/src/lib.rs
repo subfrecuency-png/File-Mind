@@ -22,7 +22,7 @@ pub mod versions;
 pub mod watch;
 
 pub use adapter::{Entry, FsEvent, LinkKind, NativeMeta, OsAdapter, TrashReceipt, WatchHandle};
-pub use mode::Mode;
+pub use mode::{Mode, RiskTier};
 pub use model::*;
 pub use scanner::{ScanOpts, ScanReport, Scanner};
 

@@ -98,6 +98,14 @@ pub trait OsAdapter: Send + Sync {
     /// Move to Trash / Recycle Bin. **This is the only deletion primitive in FileMind.**
     fn move_to_trash(&self, path: &Path) -> Result<TrashReceipt>;
 
+    /// Where [`OsAdapter::move_to_trash`] would put `path` right now, so the
+    /// transaction journal can record the destination *before* the move.
+    fn trash_target(&self, path: &Path) -> Result<PathBuf>;
+
+    /// Move `path` to the exact `target` (from [`OsAdapter::trash_target`]).
+    /// Must fail if `target` exists.
+    fn move_to_trash_at(&self, path: &Path, target: &Path) -> Result<TrashReceipt>;
+
     /// Rename/move within the same volume. Must fail if `to` exists.
     /// Only the transaction manager may call this.
     fn rename_no_clobber(&self, from: &Path, to: &Path) -> Result<()>;

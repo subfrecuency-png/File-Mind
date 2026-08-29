@@ -12,3 +12,6 @@ chrono.workspace = true
 walkdir.workspace = true
 directories.workspace = true
 notify.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

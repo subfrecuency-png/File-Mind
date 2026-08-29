@@ -264,6 +264,12 @@ mod tests {
         fn move_to_trash(&self, _: &Path) -> Result<TrashReceipt> {
             unimplemented!()
         }
+        fn trash_target(&self, _: &Path) -> Result<PathBuf> {
+            unimplemented!()
+        }
+        fn move_to_trash_at(&self, _: &Path, _: &Path) -> Result<TrashReceipt> {
+            unimplemented!()
+        }
         fn rename_no_clobber(&self, _: &Path, _: &Path) -> Result<()> {
             unimplemented!()
         }

@@ -119,6 +119,18 @@ impl OsAdapter for WinAdapter {
         )))
     }
 
+    fn trash_target(&self, _path: &Path) -> Result<PathBuf> {
+        Err(CoreError::Other(anyhow::anyhow!(
+            "recycle bin not implemented yet"
+        )))
+    }
+
+    fn move_to_trash_at(&self, _path: &Path, _target: &Path) -> Result<TrashReceipt> {
+        Err(CoreError::Other(anyhow::anyhow!(
+            "recycle bin not implemented yet"
+        )))
+    }
+
     fn rename_no_clobber(&self, from: &Path, to: &Path) -> Result<()> {
         if to.exists() {
             return Err(CoreError::DestinationExists(to.to_path_buf()));

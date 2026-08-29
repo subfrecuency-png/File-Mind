@@ -108,6 +108,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<SuggestCmd>,
     },
+    /// Transactions FileMind has run (newest first).
+    History {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Show one transaction's steps.
+        id: Option<String>,
+    },
+    /// Reverse a transaction. Files edited after the move are left alone and reported.
+    Undo { txn_id: String },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -168,6 +177,15 @@ enum ProjectCmd {
 enum SuggestCmd {
     /// Hide a suggestion; it stays hidden across re-analysis.
     Dismiss { id: i64 },
+    /// Show exactly what applying a suggestion would do. Touches nothing.
+    Plan { id: i64 },
+    /// Apply a suggestion as a reversible transaction (needs assist mode and your approval).
+    Apply {
+        id: i64,
+        /// Approve without the interactive prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -245,6 +263,20 @@ fn print_scan(v: &Value) {
     );
 }
 
+fn print_plan(v: &Value) {
+    println!(
+        "plan {}  ({} step(s), risk tier {}, mode {})",
+        v["txn_id"].as_str().unwrap_or("?"),
+        v["steps"],
+        v["risk_tier"],
+        v["mode"].as_str().unwrap_or("?")
+    );
+    println!("{}", v["diff"].as_str().unwrap_or(""));
+    for p in v["problems"].as_array().cloned().unwrap_or_default() {
+        println!("  problem: {}", p.as_str().unwrap_or(""));
+    }
+}
+
 fn open_db() -> Result<(PathBuf, Db)> {
     let path = filemind_storage::default_db_path()?;
     let db = Db::open(&path)?;
@@ -266,7 +298,14 @@ fn human_bytes(b: u64) -> String {
     }
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("error: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -560,7 +599,12 @@ fn main() -> Result<()> {
             if let Some(m) = value {
                 db.set_setting("mode", &serde_json::to_value(m)?)?;
             }
-            println!("{}", db.get_setting("mode")?.unwrap_or_default());
+            println!(
+                "{}",
+                db.get_setting("mode")?
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "observe".into())
+            );
         }
 
         Cmd::Info { path } => {
@@ -740,6 +784,65 @@ fn main() -> Result<()> {
                 if v["items"].as_array().map(|a| a.is_empty()).unwrap_or(true) {
                     println!("  (none — run `filemind analyze` after hashing has finished)");
                 }
+            }
+            Some(SuggestCmd::Plan { id }) => {
+                let v = if let Some(mut a) = agent() {
+                    a.call("suggest.plan", json!({"id": id}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(filemind_agent::actions::plan(adapter.as_ref(), &db, id)?.1)
+                };
+                print_plan(&v);
+            }
+            Some(SuggestCmd::Apply { id, yes }) => {
+                let plan = if let Some(mut a) = agent() {
+                    a.call("suggest.plan", json!({"id": id}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(filemind_agent::actions::plan(adapter.as_ref(), &db, id)?.1)
+                };
+                print_plan(&plan);
+                if !plan["problems"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true)
+                {
+                    bail!("not applying: fix the problems above or dismiss the suggestion");
+                }
+                if plan["mode"].as_str() == Some("observe") {
+                    bail!("mode is observe — FileMind only proposes. Run `filemind mode assist` to allow approved actions.");
+                }
+                if !yes {
+                    eprint!(
+                        "Apply {} step(s)? Reversible with `filemind undo {}`. [y/N] ",
+                        plan["steps"],
+                        plan["txn_id"].as_str().unwrap_or("<id>")
+                    );
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    if !matches!(line.trim(), "y" | "Y" | "yes") {
+                        println!("not applied");
+                        return Ok(());
+                    }
+                }
+                let v = if let Some(mut a) = agent() {
+                    a.call("suggest.apply", json!({"id": id, "approved": true}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(filemind_agent::actions::apply(
+                        adapter.as_ref(),
+                        &db,
+                        id,
+                        true
+                    )?)
+                };
+                println!(
+                    "{}: {} step(s) done, {} failed — undo with `filemind undo {}`",
+                    v["state"].as_str().unwrap_or("?"),
+                    v["done"],
+                    v["failed"],
+                    v["txn_id"].as_str().unwrap_or("?")
+                );
             }
             Some(SuggestCmd::Dismiss { id }) => {
                 let ok = if let Some(mut a) = agent() {
@@ -1102,6 +1205,91 @@ fn main() -> Result<()> {
                 }
             }
         },
+
+        Cmd::History { limit, id } => {
+            if let Some(id) = id {
+                let v = if let Some(mut a) = agent() {
+                    a.call("txn.show", json!({"id": id}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    let Some((m, state, steps)) = db.load_txn(&id)? else {
+                        bail!("unknown transaction {id}")
+                    };
+                    json!({"manifest": m, "state": state, "steps": steps, "diff": m.diff()})
+                };
+                println!("{}   [{}]", id, v["state"].as_str().unwrap_or("?"));
+                println!("{}", v["manifest"]["rationale"].as_str().unwrap_or(""));
+                println!();
+                let states = v["steps"].as_array().cloned().unwrap_or_default();
+                for line in v["diff"].as_str().unwrap_or("").lines() {
+                    // step lines start with the step number; continuation lines are indented
+                    match line
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        Some(i) if !line.starts_with("     ") => {
+                            let st = states.get(i).and_then(Value::as_str).unwrap_or("");
+                            println!("{line}   [{st}]");
+                        }
+                        _ => println!("{line}"),
+                    }
+                }
+                return Ok(());
+            }
+            let v = if let Some(mut a) = agent() {
+                a.call("txn.list", json!({"limit": limit}))?
+            } else {
+                let (_, db) = open_db()?;
+                json!(db.list_txns(limit)?)
+            };
+            let items = v.as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                println!("no transactions yet — FileMind has not moved or trashed anything");
+            }
+            for t in items {
+                let when = t["created_ts"]
+                    .as_i64()
+                    .and_then(|x| chrono::DateTime::from_timestamp(x, 0))
+                    .map(|x| {
+                        x.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "  {}  {:<8} {}/{} steps  {}  {}",
+                    when,
+                    t["state"].as_str().unwrap_or("?"),
+                    t["done"],
+                    t["steps"],
+                    t["txn_id"].as_str().unwrap_or("?"),
+                    t["rationale"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(70)
+                        .collect::<String>()
+                );
+            }
+        }
+
+        Cmd::Undo { txn_id } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("txn.undo", json!({"id": txn_id}))?
+            } else {
+                let (_, db) = open_db()?;
+                json!(filemind_agent::actions::undo(
+                    adapter.as_ref(),
+                    &db,
+                    &txn_id
+                )?)
+            };
+            println!("restored {} step(s)", v["restored"]);
+            for s in v["skipped"].as_array().cloned().unwrap_or_default() {
+                println!("  left alone: {}", s.as_str().unwrap_or(""));
+            }
+        }
 
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Start => {

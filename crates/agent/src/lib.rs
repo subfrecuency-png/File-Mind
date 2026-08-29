@@ -5,6 +5,7 @@
 /// agent's to detect a stale daemon after a rebuild.
 pub const BUILD_ID: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FILEMIND_BUILD"));
 
+pub mod actions;
 pub mod analysis;
 pub mod classifier;
 pub mod fixture;

@@ -21,8 +21,14 @@ fn detects_fixture_projects_and_keeps_user_names() {
     // projects/ is a container of project-NNN folders → each becomes its own project;
     // Downloads/ and versions/ are folder projects
     let names: Vec<&str> = ps.iter().map(|p| p.display_name()).collect();
-    assert!(!names.contains(&"Projects"), "container must not be a project: {names:?}");
-    assert!(names.iter().filter(|n| n.starts_with("Project 0")).count() >= 30, "{names:?}");
+    assert!(
+        !names.contains(&"Projects"),
+        "container must not be a project: {names:?}"
+    );
+    assert!(
+        names.iter().filter(|n| n.starts_with("Project 0")).count() >= 30,
+        "{names:?}"
+    );
     assert!(names.contains(&"Downloads"), "{names:?}");
     assert!(names.contains(&"Versions"), "{names:?}");
     // every member file belongs to exactly one project

@@ -369,6 +369,57 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             );
             Ok(json!(db.project_of_path(&path)?))
         }
+        "suggest.plan" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let (_, plan) = crate::actions::plan(ctx.adapter.as_ref(), &db, id)?;
+            Ok(json!(plan))
+        }
+        "suggest.apply" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            Ok(json!(crate::actions::apply(
+                ctx.adapter.as_ref(),
+                &db,
+                id,
+                approved
+            )?))
+        }
+        "txn.list" => {
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            Ok(json!(db.list_txns(limit)?))
+        }
+        "txn.show" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            match db.load_txn(id)? {
+                Some((m, state, steps)) => {
+                    Ok(json!({"manifest": m, "state": state, "steps": steps, "diff": m.diff()}))
+                }
+                None => anyhow::bail!("unknown transaction {id}"),
+            }
+        }
+        "txn.undo" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!(crate::actions::undo(ctx.adapter.as_ref(), &db, id)?))
+        }
+        "txn.recover" => Ok(json!(crate::actions::recover_all(
+            ctx.adapter.as_ref(),
+            &db
+        )?
+        .into_iter()
+        .map(|(id, st)| json!({"txn_id": id, "state": st}))
+        .collect::<Vec<_>>())),
         other => anyhow::bail!("unknown method {other}"),
     }
 }
@@ -377,7 +428,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
 pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use std::os::unix::net::UnixListener;
     let sock = socket_path(&ctx.db_path);
-    let _ = std::fs::remove_file(&sock); // stale socket from a previous run (our own file, not user data)
+    let _ = std::fs::remove_file(&sock); // filemind:own-file (stale socket, never user data)
     let listener = UnixListener::bind(&sock)?;
     listener.set_nonblocking(true)?;
     tracing::info!(socket = %sock.display(), "rpc listening");
@@ -410,7 +461,7 @@ pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Res
             Err(e) => tracing::warn!(error = %e, "accept failed"),
         }
     }
-    let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_file(&sock); // filemind:own-file (socket, never user data)
     Ok(())
 }
 

@@ -16,6 +16,7 @@ pub enum Mode {
 
 /// Risk tier of a rule. Only `Tier0` rules may run in `Automate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RiskTier {
     /// Reversible, never touches project folders, never trashes.
     Tier0,
@@ -23,6 +24,23 @@ pub enum RiskTier {
     Tier1,
     /// Trashes or archives.
     Tier2,
+}
+
+impl RiskTier {
+    pub fn from_u8(t: u8) -> Self {
+        match t {
+            0 => RiskTier::Tier0,
+            1 => RiskTier::Tier1,
+            _ => RiskTier::Tier2,
+        }
+    }
+    pub fn as_u8(self) -> u8 {
+        match self {
+            RiskTier::Tier0 => 0,
+            RiskTier::Tier1 => 1,
+            RiskTier::Tier2 => 2,
+        }
+    }
 }
 
 impl Mode {

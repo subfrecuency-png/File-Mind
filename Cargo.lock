@@ -468,6 +468,7 @@ dependencies = [
  "directories",
  "filemind-core",
  "notify",
+ "tempfile",
  "tracing",
  "walkdir",
 ]
@@ -491,16 +492,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "directories",
  "filemind-adapter-macos",
  "filemind-adapter-win",
  "filemind-ai",
  "filemind-core",
  "filemind-storage",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]
