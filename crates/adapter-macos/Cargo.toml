@@ -1,0 +1,13 @@
+[package]
+name = "filemind-adapter-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+filemind-core = { path = "../core" }
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+walkdir.workspace = true
+directories.workspace = true

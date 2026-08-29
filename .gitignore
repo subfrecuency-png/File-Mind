@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+/apps/desktop/node_modules
+/apps/desktop/dist
+/research/.venv
+/research/**/__pycache__
+/research/data/

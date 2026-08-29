@@ -1,0 +1,7 @@
+sentence-transformers>=3.0
+onnx>=1.16
+onnxruntime>=1.18
+lancedb>=0.10
+pandas>=2.2
+scikit-learn>=1.5
+jupyter

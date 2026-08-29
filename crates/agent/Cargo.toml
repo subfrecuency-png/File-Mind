@@ -1,0 +1,26 @@
+[package]
+name = "filemind-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "filemind-agent"
+path = "src/main.rs"
+
+[dependencies]
+filemind-core = { path = "../core" }
+filemind-storage = { path = "../storage" }
+filemind-ai = { path = "../ai" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+filemind-adapter-macos = { path = "../adapter-macos" }
+
+[target.'cfg(windows)'.dependencies]
+filemind-adapter-win = { path = "../adapter-win" }

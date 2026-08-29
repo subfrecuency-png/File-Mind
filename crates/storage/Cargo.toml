@@ -1,0 +1,16 @@
+[package]
+name = "filemind-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+filemind-core = { path = "../core" }
+anyhow.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+directories.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

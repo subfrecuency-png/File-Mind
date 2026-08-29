@@ -1,0 +1,12 @@
+[package]
+name = "filemind-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+filemind-core = { path = "../core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
