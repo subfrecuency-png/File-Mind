@@ -308,6 +308,7 @@ dependencies = [
  "filemind-storage",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]
@@ -330,8 +331,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "filemind-adapter-macos",
- "filemind-adapter-win",
+ "filemind-agent",
  "filemind-core",
  "filemind-storage",
  "serde_json",
@@ -359,6 +359,7 @@ name = "filemind-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "directories",
  "filemind-core",
  "rusqlite",

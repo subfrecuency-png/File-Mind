@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 0 — foundations.** See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 1 — read-only scanner with a persisted inventory.** See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -20,14 +20,26 @@ apps/desktop          Tauri GUI (Phase 8)
 research/             Python notebooks and eval sets (never shipped)
 ```
 
-## Build
+## Build and try it
 
 ```sh
-cargo build
+cargo build --workspace
 cargo test --workspace
-cargo run -p filemind-cli -- status
-cargo run -p filemind-cli -- scan ~/Downloads --dry-run
+
+filemind() { ./target/debug/filemind "$@"; }
+filemind status                       # where the database is, mode, suggested roots
+filemind roots add ~/Downloads        # register a folder (nothing scanned yet)
+filemind scan                         # read-only metadata scan of every root → inventory
+filemind hash --minutes 5             # content hashes, throttled to ~20 % of one core
+filemind search "offer sheet"         # lexical search over names and paths
+filemind agent install                # start filemind-agent at login (launchd)
+filemind agent run-once               # one scan + hash tick in the foreground
+filemind dev fixture /tmp/fx --entries 10000   # synthetic tree for tests/benchmarks
 ```
+
+Every scan is read-only on the scanned folder; the only thing written is the
+database under `~/Library/Application Support/FileMind/` (macOS) or
+`%LOCALAPPDATA%\FileMind\` (Windows). `roots remove` forgets the index only.
 
 ## Core safety rules
 

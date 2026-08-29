@@ -1,11 +1,9 @@
-//! `filemind-agent`: the headless daemon.
-//!
-//! Phase 0: opens the database, reports platform + mode, and exits.
-//! Phase 1+: scheduler, watcher, indexer, JSON-RPC over a local socket/pipe.
-
-mod platform;
+//! `filemind-agent`: the headless daemon. Scans registered roots on a timer
+//! and hashes content within a throttled budget. Phase 2 adds the watcher
+//! and the local JSON-RPC API.
 
 use anyhow::Result;
+use filemind_agent::{platform, scheduler};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -15,6 +13,7 @@ fn main() -> Result<()> {
         )
         .init();
 
+    let once = std::env::args().any(|a| a == "--once");
     let adapter = platform::adapter();
     let db_path = filemind_storage::default_db_path()?;
     let db = filemind_storage::Db::open(&db_path)?;
@@ -26,8 +25,9 @@ fn main() -> Result<()> {
         platform = adapter.platform(),
         db = %db_path.display(),
         mode = %mode,
-        schema = db.schema_version()?,
-        "filemind-agent ready (Phase 0: nothing scheduled yet)"
+        roots = db.list_roots()?.len(),
+        once,
+        "filemind-agent starting"
     );
-    Ok(())
+    scheduler::run(adapter.as_ref(), &db, once)
 }

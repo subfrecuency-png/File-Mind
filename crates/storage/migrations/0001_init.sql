@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS settings (
 -- Lexical search. External-content table so the inventory stays the source of truth.
 CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
   name, path_tokens, extracted_text,
-  content='', tokenize='unicode61'
+  content='', contentless_delete=1, tokenize='unicode61'
 );
 
 INSERT OR IGNORE INTO settings(key, value) VALUES ('mode', '"observe"');

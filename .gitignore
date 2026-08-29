@@ -9,3 +9,4 @@
 /research/.venv
 /research/**/__pycache__
 /research/data/
+/_to_delete/

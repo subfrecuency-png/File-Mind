@@ -109,7 +109,8 @@ impl OsAdapter for MacAdapter {
             "/usr",
             "/bin",
             "/sbin",
-            "/private",
+            "/private/etc",
+            "/private/var/db",
             "/Applications",
         ]
         .iter()
@@ -122,8 +123,28 @@ impl OsAdapter for MacAdapter {
         v
     }
 
-    fn register_autostart(&self, _enable: bool) -> Result<()> {
-        // Phase 0/1: write ~/Library/LaunchAgents/ai.filemind.agent.plist and `launchctl bootstrap`.
+    fn register_autostart(&self, enable: bool) -> Result<()> {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
+        let plist = launchd::plist_path(&home);
+        if enable {
+            let agent = launchd::agent_binary()?;
+            let log_dir = home.join("Library/Logs/FileMind");
+            std::fs::create_dir_all(&log_dir)?;
+            std::fs::create_dir_all(plist.parent().unwrap())?;
+            std::fs::write(&plist, launchd::plist(&agent, &log_dir))?;
+            launchd::launchctl(&["bootout", &launchd::domain(), &plist.to_string_lossy()]); // ignore failure
+            launchd::launchctl(&["bootstrap", &launchd::domain(), &plist.to_string_lossy()]);
+            tracing::info!(plist = %plist.display(), agent = %agent.display(), "launch agent installed");
+        } else {
+            launchd::launchctl(&["bootout", &launchd::domain(), &plist.to_string_lossy()]);
+            if plist.exists() {
+                // The plist is FileMind's own file, not user data; removing it is the uninstall.
+                std::fs::rename(&plist, plist.with_extension("plist.removed"))?;
+            }
+            tracing::info!("launch agent removed");
+        }
         Ok(())
     }
 
@@ -150,5 +171,87 @@ impl OsAdapter for MacAdapter {
         .flatten()
         .map(Path::to_path_buf)
         .collect()
+    }
+}
+
+/// launchd integration. Only `launchctl` calls are macOS-specific; the plist
+/// is written on any Unix so it can be inspected in tests.
+pub mod launchd {
+    use filemind_core::{CoreError, Result};
+    use std::path::{Path, PathBuf};
+
+    pub const LABEL: &str = "ai.filemind.agent";
+
+    pub fn plist_path(home: &Path) -> PathBuf {
+        home.join("Library/LaunchAgents")
+            .join(format!("{LABEL}.plist"))
+    }
+
+    pub fn domain() -> String {
+        #[cfg(unix)]
+        let uid = unsafe { libc_getuid() };
+        format!("gui/{uid}")
+    }
+
+    #[cfg(unix)]
+    unsafe fn libc_getuid() -> u32 {
+        extern "C" {
+            fn getuid() -> u32;
+        }
+        getuid()
+    }
+
+    /// The agent binary next to the current executable.
+    pub fn agent_binary() -> Result<PathBuf> {
+        let exe = std::env::current_exe()?;
+        let dir = exe
+            .parent()
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no exe dir")))?;
+        let agent = dir.join("filemind-agent");
+        if !agent.exists() {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "filemind-agent not found next to {} — run `cargo build --workspace` first",
+                exe.display()
+            )));
+        }
+        Ok(agent)
+    }
+
+    pub fn plist(agent: &Path, log_dir: &Path) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>{agent}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>StandardOutPath</key><string>{log}/agent.log</string>
+  <key>StandardErrorPath</key><string>{log}/agent.err.log</string>
+  <key>EnvironmentVariables</key><dict><key>RUST_LOG</key><string>info</string></dict>
+</dict>
+</plist>
+"#,
+            agent = agent.display(),
+            log = log_dir.display()
+        )
+    }
+
+    pub fn launchctl(args: &[&str]) {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        match std::process::Command::new("launchctl").args(args).output() {
+            Ok(o) if !o.status.success() => {
+                tracing::debug!(args = ?args, stderr = %String::from_utf8_lossy(&o.stderr), "launchctl")
+            }
+            Err(e) => tracing::warn!(error = %e, "launchctl not runnable"),
+            _ => {}
+        }
     }
 }

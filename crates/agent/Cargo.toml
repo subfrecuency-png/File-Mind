@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "filemind-agent"
 path = "src/main.rs"
@@ -24,3 +27,6 @@ filemind-adapter-macos = { path = "../adapter-macos" }
 
 [target.'cfg(windows)'.dependencies]
 filemind-adapter-win = { path = "../adapter-win" }
+
+[dev-dependencies]
+tempfile.workspace = true

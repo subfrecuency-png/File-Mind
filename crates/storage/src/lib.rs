@@ -1,11 +1,21 @@
 //! SQLite system of record (WAL + FTS5) and, later, the LanceDB vector store.
 
+pub mod inventory;
+
+pub use inventory::{Root, UpsertStats};
+
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// Embedded migrations, applied in order. Add new files to the end; never edit old ones.
-const MIGRATIONS: &[(&str, &str)] = &[("0001_init", include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001_init", include_str!("../migrations/0001_init.sql")),
+    (
+        "0002_scan_seq",
+        include_str!("../migrations/0002_scan_seq.sql"),
+    ),
+];
 
 /// Default per-user database location:
 /// macOS `~/Library/Application Support/FileMind/filemind.db`,
@@ -99,7 +109,12 @@ impl Db {
         let q = |sql: &str| -> Result<i64> { Ok(self.conn.query_row(sql, [], |r| r.get(0))?) };
         Ok(Counts {
             roots: q("SELECT COUNT(*) FROM roots")?,
-            files: q("SELECT COUNT(*) FROM files WHERE kind = 'file'")?,
+            files: q("SELECT COUNT(*) FROM files WHERE kind = 'file' AND status = 'present'")?,
+            dirs: q("SELECT COUNT(*) FROM files WHERE kind = 'dir' AND status = 'present'")?,
+            missing: q("SELECT COUNT(*) FROM files WHERE status = 'missing'")?,
+            hashed: q("SELECT COUNT(*) FROM files WHERE kind = 'file' AND status = 'present' AND blob_id IS NOT NULL")?,
+            bytes: q("SELECT COALESCE(SUM(size),0) FROM files WHERE kind = 'file' AND status = 'present'")?,
+            events: q("SELECT COUNT(*) FROM file_events")?,
             transactions: q("SELECT COUNT(*) FROM transactions")?,
         })
     }
@@ -109,6 +124,11 @@ impl Db {
 pub struct Counts {
     pub roots: i64,
     pub files: i64,
+    pub dirs: i64,
+    pub missing: i64,
+    pub hashed: i64,
+    pub bytes: i64,
+    pub events: i64,
     pub transactions: i64,
 }
 
@@ -122,14 +142,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 1);
+            assert_eq!(db.schema_version().unwrap(), 2);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), 2);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }
