@@ -209,6 +209,9 @@ mod tests {
                 });
             Ok(Box::new(it))
         }
+        fn stat(&self, _: &Path) -> Result<Option<Entry>> {
+            Ok(None)
+        }
         fn native_metadata(&self, _: &Path) -> Result<NativeMeta> {
             Ok(NativeMeta::default())
         }

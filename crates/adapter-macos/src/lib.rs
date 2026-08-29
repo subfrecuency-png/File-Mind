@@ -5,6 +5,9 @@
 
 #![cfg(unix)]
 
+mod notify_bridge;
+pub mod spotlight;
+
 use chrono::{DateTime, TimeZone, Utc};
 use filemind_core::adapter::*;
 use filemind_core::model::{EntryKind, FileId};
@@ -20,6 +23,32 @@ fn ts(secs: i64) -> DateTime<Utc> {
     Utc.timestamp_opt(secs, 0).single().unwrap_or_else(Utc::now)
 }
 
+fn entry_from_meta(path: &Path, md: &std::fs::Metadata, depth: usize) -> Entry {
+    let ft = md.file_type();
+    let kind = if ft.is_symlink() {
+        EntryKind::Link
+    } else if ft.is_dir() {
+        EntryKind::Dir
+    } else if ft.is_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    };
+    Entry {
+        path: path.to_path_buf(),
+        file_id: FileId {
+            device: md.dev(),
+            index: md.ino(),
+        },
+        kind,
+        size: md.len(),
+        mtime: ts(md.mtime()),
+        ctime: Some(ts(md.ctime())),
+        birthtime: md.created().ok().map(DateTime::<Utc>::from),
+        depth,
+    }
+}
+
 impl OsAdapter for MacAdapter {
     fn platform(&self) -> &'static str {
         if cfg!(target_os = "macos") {
@@ -29,11 +58,17 @@ impl OsAdapter for MacAdapter {
         }
     }
 
-    fn watch(&self, _roots: &[PathBuf], _tx: Sender<FsEvent>) -> Result<Box<dyn WatchHandle>> {
-        // Phase 2: FSEvents via the `notify` crate.
-        Err(CoreError::Other(anyhow::anyhow!(
-            "watcher not implemented yet (Phase 2)"
-        )))
+    fn watch(&self, roots: &[PathBuf], tx: Sender<FsEvent>) -> Result<Box<dyn WatchHandle>> {
+        notify_bridge::watch(roots, tx)
+    }
+
+    fn stat(&self, path: &Path) -> Result<Option<Entry>> {
+        let md = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(Some(entry_from_meta(path, &md, 0)))
     }
 
     fn enumerate(
@@ -48,42 +83,18 @@ impl OsAdapter for MacAdapter {
             .into_iter()
             .map(|r| {
                 let d = r.map_err(|e| CoreError::Other(e.into()))?;
-                let ft = d.file_type();
-                let kind = if ft.is_symlink() {
-                    EntryKind::Link
-                } else if ft.is_dir() {
-                    EntryKind::Dir
-                } else if ft.is_file() {
-                    EntryKind::File
-                } else {
-                    EntryKind::Other
-                };
                 let md = std::fs::symlink_metadata(d.path())?;
-                Ok(Entry {
-                    path: d.path().to_path_buf(),
-                    file_id: FileId {
-                        device: md.dev(),
-                        index: md.ino(),
-                    },
-                    kind,
-                    size: md.len(),
-                    mtime: ts(md.mtime()),
-                    ctime: Some(ts(md.ctime())),
-                    birthtime: md.created().ok().map(DateTime::<Utc>::from),
-                    depth: d.depth(),
-                })
+                Ok(entry_from_meta(d.path(), &md, d.depth()))
             });
         Ok(Box::new(it))
     }
 
-    fn native_metadata(&self, _path: &Path) -> Result<NativeMeta> {
-        // Phase 2: Spotlight kMDItem* attributes via `mdls`.
-        Ok(NativeMeta::default())
+    fn native_metadata(&self, path: &Path) -> Result<NativeMeta> {
+        spotlight::mdls(path)
     }
 
-    fn native_search(&self, _query: &str) -> Result<Vec<PathBuf>> {
-        // Phase 2: `mdfind`.
-        Ok(Vec::new())
+    fn native_search(&self, query: &str) -> Result<Vec<PathBuf>> {
+        spotlight::mdfind(query)
     }
 
     fn move_to_trash(&self, _path: &Path) -> Result<TrashReceipt> {

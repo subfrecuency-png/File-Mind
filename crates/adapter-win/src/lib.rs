@@ -4,6 +4,8 @@
 
 #![cfg(windows)]
 
+mod notify_bridge;
+
 use chrono::{DateTime, Utc};
 use filemind_core::adapter::*;
 use filemind_core::model::{EntryKind, FileId};
@@ -20,10 +22,42 @@ impl OsAdapter for WinAdapter {
         "windows"
     }
 
-    fn watch(&self, _roots: &[PathBuf], _tx: Sender<FsEvent>) -> Result<Box<dyn WatchHandle>> {
-        Err(CoreError::Other(anyhow::anyhow!(
-            "watcher not implemented yet (Phase 2)"
-        )))
+    fn watch(&self, roots: &[PathBuf], tx: Sender<FsEvent>) -> Result<Box<dyn WatchHandle>> {
+        notify_bridge::watch(roots, tx)
+    }
+
+    fn stat(&self, path: &Path) -> Result<Option<Entry>> {
+        let md = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        const REPARSE: u32 = 0x400;
+        let kind = if md.file_attributes() & REPARSE != 0 {
+            EntryKind::Link
+        } else if md.is_dir() {
+            EntryKind::Dir
+        } else if md.is_file() {
+            EntryKind::File
+        } else {
+            EntryKind::Other
+        };
+        Ok(Some(Entry {
+            path: path.to_path_buf(),
+            file_id: FileId {
+                device: 0,
+                index: 0,
+            },
+            kind,
+            size: md.len(),
+            mtime: md
+                .modified()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now()),
+            ctime: None,
+            birthtime: md.created().ok().map(DateTime::<Utc>::from),
+            depth: 0,
+        }))
     }
 
     fn enumerate(

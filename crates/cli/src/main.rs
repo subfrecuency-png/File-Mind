@@ -7,8 +7,10 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use filemind_agent::pipeline::{self, HashOpts};
 use filemind_agent::platform;
+use filemind_agent::rpc::Client;
 use filemind_core::{Mode, ScanOpts, Scanner};
 use filemind_storage::Db;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -56,6 +58,8 @@ enum Cmd {
         #[arg(value_parser = parse_mode)]
         value: Option<Mode>,
     },
+    /// Show what FileMind and Spotlight know about one file.
+    Info { path: PathBuf },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -86,6 +90,12 @@ enum AgentCmd {
     Uninstall,
     /// Run one scan + hash tick in the foreground.
     RunOnce,
+    /// Run the agent in the foreground (watcher + scheduler + socket) until stopped.
+    Start,
+    /// Ask a running agent to stop.
+    Stop,
+    /// Is the agent running? Prints its uptime and watcher counters.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -107,6 +117,29 @@ fn parse_mode(s: &str) -> Result<Mode, String> {
             "unknown mode '{other}' (expected observe, assist or automate)"
         )),
     }
+}
+
+/// Connect to a running agent, if any. When it is running, commands go through
+/// it so there is a single writer and the watcher stays consistent.
+fn agent() -> Option<Client> {
+    let path = filemind_storage::default_db_path().ok()?;
+    Client::connect(&path)
+}
+
+fn print_scan(v: &Value) {
+    let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+    println!(
+        "{}  {} files, {} folders, {}  in {:.1}s",
+        v.get("path").and_then(Value::as_str).unwrap_or("?"),
+        g("files"),
+        g("dirs"),
+        human_bytes(g("bytes")),
+        g("elapsed_ms") as f64 / 1000.0
+    );
+    println!(
+        "   new {}  modified {}  renamed {}  moved {}  missing {}  unchanged {}  links {}  ignored {}  errors {}",
+        g("new"), g("modified"), g("renamed"), g("moved"), g("missing"), g("unchanged"), g("links"), g("ignored"), g("errors")
+    );
 }
 
 fn open_db() -> Result<(PathBuf, Db)> {
@@ -143,13 +176,64 @@ fn main() -> Result<()> {
 
     match cli.cmd {
         Cmd::Status => {
+            if let Some(mut a) = agent() {
+                let v = a.call("status", json!({}))?;
+                let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+                println!("agent         running ({}s up)", g("uptime_s"));
+                println!(
+                    "platform      {}",
+                    v.get("platform").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "database      {}",
+                    v.get("database").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "mode          {}",
+                    v.get("mode").and_then(Value::as_str).unwrap_or("observe")
+                );
+                println!(
+                    "files         {}  ({} hashed, {} missing)",
+                    g("files"),
+                    g("hashed"),
+                    g("missing")
+                );
+                println!("folders       {}", g("dirs"));
+                println!("bytes         {}", human_bytes(g("bytes")));
+                println!("events        {}", g("events"));
+                println!("transactions  {}", g("transactions"));
+                if let Some(w) = v.get("watcher") {
+                    let w = |k: &str| w.get(k).and_then(Value::as_u64).unwrap_or(0);
+                    println!(
+                        "watcher       {} roots, {} raw events, {} changes applied",
+                        w("roots"),
+                        w("raw_events"),
+                        w("changes_applied")
+                    );
+                }
+                println!("roots:");
+                for r in v
+                    .get("roots")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    println!("  {}", r.get("path").and_then(Value::as_str).unwrap_or("?"));
+                }
+                return Ok(());
+            }
             let (path, db) = open_db()?;
+            println!(
+                "agent         not running (`filemind agent install` or `filemind agent start`)"
+            );
             let c = db.counts()?;
             println!("platform      {}", adapter.platform());
             println!("database      {}", path.display());
             println!(
                 "mode          {}",
-                db.get_setting("mode")?.unwrap_or_default()
+                db.get_setting("mode")?
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "observe".into())
             );
             println!(
                 "files         {}  ({} hashed, {} missing)",
@@ -184,6 +268,37 @@ fn main() -> Result<()> {
         }
 
         Cmd::Roots { cmd } => {
+            if let Some(mut a) = agent() {
+                match cmd {
+                    RootsCmd::List => {
+                        for p in a
+                            .call("roots.list", json!({}))?
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                        {
+                            println!("{}", p.as_str().unwrap_or("?"));
+                        }
+                    }
+                    RootsCmd::Add { path } => {
+                        let v = a.call("roots.add", json!({"path": path}))?;
+                        println!(
+                            "added {}  (root #{})",
+                            v["path"].as_str().unwrap_or("?"),
+                            v["root_id"]
+                        );
+                    }
+                    RootsCmd::Remove { path } => {
+                        let v = a.call("roots.remove", json!({"path": path}))?;
+                        if v["removed"].as_bool() == Some(true) {
+                            println!("forgot {} (files on disk untouched)", path.display());
+                        } else {
+                            bail!("{} is not a registered root", path.display());
+                        }
+                    }
+                }
+                return Ok(());
+            }
             let (_, db) = open_db()?;
             match cmd {
                 RootsCmd::List => {
@@ -230,6 +345,11 @@ fn main() -> Result<()> {
                     report.errors
                 );
                 println!("(dry run: database untouched)");
+            } else if let Some(mut a) = agent() {
+                let v = a.call("scan", json!({"path": root}))?;
+                for r in v.as_array().cloned().unwrap_or_default() {
+                    print_scan(&r);
+                }
             } else {
                 let (_, db) = open_db()?;
                 let targets: Vec<PathBuf> = match root {
@@ -266,6 +386,19 @@ fn main() -> Result<()> {
         }
 
         Cmd::Hash { duty, minutes } => {
+            if let Some(mut a) = agent() {
+                let v = a.call("hash", json!({"duty": duty, "minutes": minutes}))?;
+                let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+                println!(
+                    "hashed {} files ({}) in {:.1}s  errors {}  still pending {}",
+                    g("hashed"),
+                    human_bytes(g("bytes")),
+                    g("elapsed_ms") as f64 / 1000.0,
+                    g("errors"),
+                    g("remaining")
+                );
+                return Ok(());
+            }
             let (_, db) = open_db()?;
             let o = pipeline::hash_pending(
                 &db,
@@ -286,6 +419,21 @@ fn main() -> Result<()> {
         }
 
         Cmd::Search { query, limit } => {
+            if let Some(mut a) = agent() {
+                for r in a
+                    .call("search", json!({"query": query, "limit": limit}))?
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let p = r["path"].as_str().unwrap_or("?");
+                    match r["status"].as_str() {
+                        Some("present") | None => println!("{p}"),
+                        Some(s) => println!("{p}  [{s}]"),
+                    }
+                }
+                return Ok(());
+            }
             let (_, db) = open_db()?;
             for (p, status) in db.search_lexical(&query, limit)? {
                 if status == "present" {
@@ -297,6 +445,14 @@ fn main() -> Result<()> {
         }
 
         Cmd::Mode { value } => {
+            if let Some(mut a) = agent() {
+                let v = match value {
+                    Some(m) => a.call("mode.set", json!({"mode": serde_json::to_value(m)?}))?,
+                    None => a.call("mode.get", json!({}))?,
+                };
+                println!("{}", v.as_str().unwrap_or("observe"));
+                return Ok(());
+            }
             let (_, db) = open_db()?;
             if let Some(m) = value {
                 db.set_setting("mode", &serde_json::to_value(m)?)?;
@@ -304,7 +460,73 @@ fn main() -> Result<()> {
             println!("{}", db.get_setting("mode")?.unwrap_or_default());
         }
 
+        Cmd::Info { path } => {
+            let path = path.canonicalize()?;
+            let (indexed, meta) = if let Some(mut a) = agent() {
+                let v = a.call("info", json!({"path": path}))?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
+                return Ok(());
+            } else {
+                let (_, db) = open_db()?;
+                (db.file_at_path(&path)?, adapter.native_metadata(&path)?)
+            };
+            println!("path          {}", path.display());
+            println!(
+                "indexed       {}",
+                indexed
+                    .map(|(id, kind)| format!("yes ({kind}, id {id})"))
+                    .unwrap_or("no".into())
+            );
+            println!(
+                "content type  {}",
+                meta.content_type.unwrap_or_else(|| "-".into())
+            );
+            if !meta.where_from.is_empty() {
+                println!("downloaded    {}", meta.where_from.join(", "));
+            }
+            if !meta.tags.is_empty() {
+                println!("tags          {}", meta.tags.join(", "));
+            }
+            for (k, v) in meta.extra {
+                println!("{:<13} {}", k.trim_start_matches("kMDItem"), v);
+            }
+        }
+
         Cmd::Agent { cmd } => match cmd {
+            AgentCmd::Start => {
+                if agent().is_some() {
+                    bail!("an agent is already running");
+                }
+                let exe = std::env::current_exe()?;
+                let bin = exe.with_file_name("filemind-agent");
+                println!("starting {} (Ctrl-C to stop)", bin.display());
+                let status = std::process::Command::new(bin).status()?;
+                if !status.success() {
+                    bail!("agent exited with {status}");
+                }
+            }
+            AgentCmd::Stop => {
+                let path = filemind_storage::default_db_path()?;
+                if agent().is_none() {
+                    println!("agent is not running");
+                } else {
+                    std::fs::write(path.with_file_name("agent.stop"), b"")?;
+                    println!("stop requested");
+                }
+            }
+            AgentCmd::Status => match agent() {
+                Some(mut a) => {
+                    let v = a.call("status", json!({}))?;
+                    println!("running  uptime {}s", v["uptime_s"]);
+                    if let Some(w) = v.get("watcher") {
+                        println!(
+                            "watcher  {} roots, {} raw events, {} changes applied",
+                            w["roots"], w["raw_events"], w["changes_applied"]
+                        );
+                    }
+                }
+                None => println!("not running"),
+            },
             AgentCmd::Install => {
                 adapter.register_autostart(true)?;
                 println!("agent registered to start at login");

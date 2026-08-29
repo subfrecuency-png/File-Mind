@@ -34,6 +34,18 @@ fn key(id: FileId) -> String {
     format!("{}:{}", id.device, id.index)
 }
 
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn fnv(s: &str) -> u32 {
+    s.bytes().fold(0x811c_9dc5u32, |h, b| {
+        (h ^ b as u32).wrapping_mul(0x0100_0193)
+    })
+}
+
 fn kind_str(k: EntryKind) -> &'static str {
     match k {
         EntryKind::File => "file",
@@ -140,6 +152,53 @@ impl Db {
         )?)
     }
 
+    /// The registered root that contains `path` (longest prefix wins).
+    pub fn root_for_path(&self, path: &Path) -> Result<Option<Root>> {
+        let mut best: Option<Root> = None;
+        for r in self.list_roots()? {
+            if path.starts_with(&r.path)
+                && best
+                    .as_ref()
+                    .is_none_or(|b| r.path.components().count() > b.path.components().count())
+            {
+                best = Some(r);
+            }
+        }
+        Ok(best)
+    }
+
+    /// Current scan generation of a root (0 if never scanned).
+    pub fn current_seq(&self, root_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT scan_seq FROM roots WHERE root_id = ?1",
+            [root_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Mark `path` and everything beneath it missing (watcher delete/rename-away).
+    pub fn mark_missing_path(&self, path: &Path, ts: i64, source: &str) -> Result<u64> {
+        let p = path.to_string_lossy().to_string();
+        let prefix = format!(
+            "{}{}",
+            p.trim_end_matches(std::path::MAIN_SEPARATOR),
+            std::path::MAIN_SEPARATOR
+        );
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
+             SELECT file_id, ?1, 'deleted', path, NULL, ?4 FROM files
+             WHERE status = 'present' AND (path = ?2 OR path LIKE ?3 ESCAPE '\\')",
+            params![ts, p, like_escape(&prefix) + "%", source],
+        )?;
+        let n = tx.execute(
+            "UPDATE files SET status = 'missing' WHERE status = 'present' AND (path = ?1 OR path LIKE ?2 ESCAPE '\\')",
+            params![p, like_escape(&prefix) + "%"],
+        )?;
+        tx.commit()?;
+        Ok(n as u64)
+    }
+
     // ----- files --------------------------------------------------------
 
     /// Upsert a batch of scanned entries for `root_id` inside one SQLite transaction.
@@ -149,6 +208,18 @@ impl Db {
         seq: i64,
         entries: &[Entry],
         scan_ts: i64,
+    ) -> Result<UpsertStats> {
+        self.upsert_entries_from(root_id, seq, entries, scan_ts, "scan")
+    }
+
+    /// Like [`Db::upsert_entries`] but tagging events with `source` (`scan` or `watcher`).
+    pub fn upsert_entries_from(
+        &self,
+        root_id: i64,
+        seq: i64,
+        entries: &[Entry],
+        scan_ts: i64,
+        source: &str,
     ) -> Result<UpsertStats> {
         let mut stats = UpsertStats::default();
         let tx = self.conn.unchecked_transaction()?;
@@ -168,9 +239,19 @@ impl Db {
             )?;
             let mut touch = tx.prepare_cached("UPDATE files SET last_seen = ?2, status = 'present', last_scan_seq = ?3 WHERE file_id = ?1")?;
             let mut event = tx.prepare_cached(
-                "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source) VALUES (?1, ?2, ?3, ?4, ?5, 'scan')",
+                "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             let mut fts_del = tx.prepare_cached("DELETE FROM files_fts WHERE rowid = ?1")?;
+            // A path can hold only one present identity: when a file is
+            // overwritten by rename, the displaced identity is gone.
+            let mut displace_ev = tx.prepare_cached(
+                "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
+                 SELECT file_id, ?2, 'deleted', path, NULL, ?4 FROM files
+                 WHERE path = ?1 AND file_id <> ?3 AND status = 'present'",
+            )?;
+            let mut displace = tx.prepare_cached(
+                "UPDATE files SET status = 'missing' WHERE path = ?1 AND file_id <> ?2 AND status = 'present'",
+            )?;
             let mut fts_ins = tx.prepare_cached(
                 "INSERT INTO files_fts(rowid, name, path_tokens, extracted_text) VALUES (?1, ?2, ?3, '')",
             )?;
@@ -191,8 +272,8 @@ impl Db {
                 let ctime = e.ctime.map(|t| t.timestamp());
                 let birth = e.birthtime.map(|t| t.timestamp());
 
-                let existing = find
-                    .query_row([&id], |r| {
+                let mut lookup = |id: &str| {
+                    find.query_row([id], |r| {
                         Ok((
                             r.get::<_, i64>(0)?,
                             r.get::<_, String>(1)?,
@@ -202,7 +283,18 @@ impl Db {
                             r.get::<_, String>(5)?,
                         ))
                     })
-                    .optional()?;
+                    .optional()
+                };
+                let mut id = id;
+                let mut existing = lookup(&id)?;
+                // Hard link: the identity is already recorded at another path
+                // that still exists on disk. Give this path its own identity.
+                if let Some((_, ref old_path, ..)) = existing {
+                    if *old_path != path && Path::new(old_path).symlink_metadata().is_ok() {
+                        id = format!("{id}@{:08x}", fnv(&path));
+                        existing = lookup(&id)?;
+                    }
+                }
 
                 match existing {
                     None => {
@@ -223,12 +315,15 @@ impl Db {
                         ])?;
                         let rowid = tx.last_insert_rowid();
                         fts_ins.execute(params![rowid, name, path_tokens(&e.path)])?;
+                        displace_ev.execute(params![path, scan_ts, id, source])?;
+                        displace.execute(params![path, id])?;
                         event.execute(params![
                             id,
                             scan_ts,
                             "created",
                             Option::<String>::None,
-                            path
+                            path,
+                            source
                         ])?;
                         stats.inserted += 1;
                     }
@@ -254,6 +349,8 @@ impl Db {
                             seq
                         ])?;
                         if path_changed {
+                            displace_ev.execute(params![path, scan_ts, id, source])?;
+                            displace.execute(params![path, id])?;
                             let kind = if old_name != name
                                 && Path::new(&old_path).parent() == e.path.parent()
                             {
@@ -263,7 +360,7 @@ impl Db {
                                 stats.moved += 1;
                                 "moved"
                             };
-                            event.execute(params![id, scan_ts, kind, old_path, path])?;
+                            event.execute(params![id, scan_ts, kind, old_path, path, source])?;
                             fts_del.execute([rowid])?;
                             fts_ins.execute(params![rowid, name, path_tokens(&e.path)])?;
                         } else if was_missing {
@@ -272,7 +369,8 @@ impl Db {
                                 scan_ts,
                                 "restored",
                                 Option::<String>::None,
-                                path
+                                path,
+                                source
                             ])?;
                             stats.updated += 1;
                         } else {
@@ -281,7 +379,8 @@ impl Db {
                                 scan_ts,
                                 "modified",
                                 Option::<String>::None,
-                                path
+                                path,
+                                source
                             ])?;
                             stats.updated += 1;
                         }
@@ -369,6 +468,18 @@ impl Db {
             [],
             |r| r.get::<_, i64>(0),
         )? as u64)
+    }
+
+    /// Present row at exactly `path`, if any: (file_id, kind).
+    pub fn file_at_path(&self, path: &Path) -> Result<Option<(String, String)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT file_id, kind FROM files WHERE path = ?1 AND status = 'present'",
+                [path.to_string_lossy()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
     }
 
     pub fn file_status(&self, file_id: FileId) -> Result<Option<(PathBuf, String)>> {

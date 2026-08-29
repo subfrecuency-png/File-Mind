@@ -85,6 +85,10 @@ pub trait OsAdapter: Send + Sync {
         opts: &ScanOptsNative,
     ) -> Result<Box<dyn Iterator<Item = Result<Entry>> + Send>>;
 
+    /// Stat a single path without following links. `Ok(None)` if it does not exist.
+    /// `depth` is left at 0; callers that need it compute it from the root.
+    fn stat(&self, path: &Path) -> Result<Option<Entry>>;
+
     /// Platform metadata for a single path.
     fn native_metadata(&self, path: &Path) -> Result<NativeMeta>;
 

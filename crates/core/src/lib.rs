@@ -14,6 +14,7 @@ pub mod mode;
 pub mod model;
 pub mod scanner;
 pub mod txn;
+pub mod watch;
 
 pub use adapter::{Entry, FsEvent, LinkKind, NativeMeta, OsAdapter, TrashReceipt, WatchHandle};
 pub use mode::Mode;

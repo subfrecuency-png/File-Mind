@@ -45,3 +45,28 @@ fn scan_persists_and_tracks_rename_across_runs() {
     let hits = db.search_lexical("b", 5).unwrap();
     assert_eq!(hits[0].0, root.canonicalize().unwrap().join("b.txt"));
 }
+
+#[cfg(unix)]
+#[test]
+fn hard_links_get_their_own_identity() {
+    let adapter = filemind_adapter_macos::MacAdapter;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("orig.txt"), b"same").unwrap();
+    std::fs::hard_link(root.join("orig.txt"), root.join("link.txt")).unwrap();
+
+    let db = Db::open_in_memory().unwrap();
+    let o = scan_root(&adapter, &db, &root).unwrap();
+    assert_eq!(o.report.files, 2);
+    assert_eq!(o.upsert.moved, 0, "a hard link is not a move");
+    let c = db.counts().unwrap();
+    assert_eq!(c.files, 2);
+
+    // a second scan is stable
+    let o = scan_root(&adapter, &db, &root).unwrap();
+    assert_eq!(
+        (o.upsert.moved, o.upsert.inserted, o.upsert.unchanged),
+        (0, 0, 2)
+    );
+}

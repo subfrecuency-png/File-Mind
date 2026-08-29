@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 1 — read-only scanner with a persisted inventory.** See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 2 — live index.** A background agent watches your folders (FSEvents / inotify / ReadDirectoryChangesW), keeps the inventory current within about a second, and exposes a local socket the CLI talks to. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -32,8 +32,11 @@ filemind roots add ~/Downloads        # register a folder (nothing scanned yet)
 filemind scan                         # read-only metadata scan of every root → inventory
 filemind hash --minutes 5             # content hashes, throttled to ~20 % of one core
 filemind search "offer sheet"         # lexical search over names and paths
-filemind agent install                # start filemind-agent at login (launchd)
-filemind agent run-once               # one scan + hash tick in the foreground
+filemind agent start                  # run the agent in the foreground (watcher + scheduler + socket)
+filemind agent install                # or: start filemind-agent at login (launchd)
+filemind agent status                 # is it running? watcher counters
+filemind agent stop                   # ask a running agent to stop
+filemind info ~/Downloads/x.pdf       # what FileMind and Spotlight know about one file
 filemind dev fixture /tmp/fx --entries 10000   # synthetic tree for tests/benchmarks
 ```
 
