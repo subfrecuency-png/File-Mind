@@ -365,6 +365,7 @@ dependencies = [
  "directories",
  "filemind-core",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",

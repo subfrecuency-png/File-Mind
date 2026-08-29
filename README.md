@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 2 — live index.** A background agent watches your folders (FSEvents / inotify / ReadDirectoryChangesW), keeps the inventory current within about a second, and exposes a local socket the CLI talks to. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 3 — the index talks back.** Live-watched inventory plus a health score, exact-duplicate groups, version-chain detection and Observe-mode suggestions (nothing is ever executed without approval). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -32,6 +32,11 @@ filemind roots add ~/Downloads        # register a folder (nothing scanned yet)
 filemind scan                         # read-only metadata scan of every root → inventory
 filemind hash --minutes 5             # content hashes, throttled to ~20 % of one core
 filemind search "offer sheet"         # lexical search over names and paths
+filemind analyze                      # rebuild duplicates, versions, health, suggestions
+filemind health                       # 0–100 score and what is costing points
+filemind dupes                        # exact-duplicate groups, keeper chosen
+filemind versions                     # report_v1 / report_v2 … chains, newest marked
+filemind suggest                      # what FileMind would do (observe mode: it never acts)
 filemind agent start                  # run the agent in the foreground (watcher + scheduler + socket)
 filemind agent install                # or: start filemind-agent at login (launchd)
 filemind agent status                 # is it running? watcher counters

@@ -10,10 +10,12 @@
 //! transaction manager.
 
 pub mod adapter;
+pub mod health;
 pub mod mode;
 pub mod model;
 pub mod scanner;
 pub mod txn;
+pub mod versions;
 pub mod watch;
 
 pub use adapter::{Entry, FsEvent, LinkKind, NativeMeta, OsAdapter, TrashReceipt, WatchHandle};

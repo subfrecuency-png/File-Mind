@@ -1,8 +1,6 @@
 //! `filemind` CLI. Drives the agent library directly; Phase 2 moves the
 //! heavy commands behind the daemon's JSON-RPC socket.
 
-mod fixture;
-
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use filemind_agent::pipeline::{self, HashOpts};
@@ -60,6 +58,30 @@ enum Cmd {
     },
     /// Show what FileMind and Spotlight know about one file.
     Info { path: PathBuf },
+    /// Rebuild duplicate groups, version chains, health and suggestions now.
+    Analyze,
+    /// Health score with a breakdown of what is costing points.
+    Health,
+    /// Exact-duplicate groups (largest waste first).
+    Dupes {
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
+    },
+    /// Version chains (report_v1, report_v2, …) with the newest marked.
+    Versions {
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
+    },
+    /// Observe-mode suggestions. Nothing is ever executed from here.
+    Suggest {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// proposed | dismissed | stale
+        #[arg(long, default_value = "proposed")]
+        state: String,
+        #[command(subcommand)]
+        cmd: Option<SuggestCmd>,
+    },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -80,6 +102,12 @@ enum RootsCmd {
     Add { path: PathBuf },
     /// Forget a folder and its index entries. Files on disk are untouched.
     Remove { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum SuggestCmd {
+    /// Hide a suggestion; it stays hidden across re-analysis.
+    Dismiss { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -492,6 +520,166 @@ fn main() -> Result<()> {
             }
         }
 
+        Cmd::Analyze => {
+            let v = if let Some(mut a) = agent() {
+                a.call("analyze", json!({}))?
+            } else {
+                let (_, db) = open_db()?;
+                let a = filemind_agent::analysis::run(&db)?;
+                json!({"duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
+                       "version_chains": a.version_chains, "suggestions": a.suggestions,
+                       "health": a.health, "elapsed_ms": a.elapsed_ms})
+            };
+            let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+            println!(
+                "health {}  duplicate groups {} ({} reclaimable)  version chains {}  suggestions {}  in {:.1}s",
+                v["health"]["score"],
+                g("duplicate_groups"),
+                human_bytes(g("duplicate_bytes")),
+                g("version_chains"),
+                g("suggestions"),
+                g("elapsed_ms") as f64 / 1000.0
+            );
+        }
+
+        Cmd::Health => {
+            let v = if let Some(mut a) = agent() {
+                a.call("health", json!({}))?
+            } else {
+                let (_, db) = open_db()?;
+                let h = filemind_core::health::score(&db.health_inputs(None)?);
+                let mut roots = Vec::new();
+                for r in db.list_roots()? {
+                    let rh = filemind_core::health::score(&db.health_inputs(Some(r.root_id))?);
+                    roots.push(json!({"path": r.path, "score": rh.score}));
+                }
+                json!({"health": h, "roots": roots, "history": db.health_history(None, 30)?})
+            };
+            let h = &v["health"];
+            println!("health score  {} / 100", h["score"]);
+            println!();
+            for c in h["components"].as_array().cloned().unwrap_or_default() {
+                let pen = c["penalty"].as_f64().unwrap_or(0.0);
+                let w = c["weight"].as_f64().unwrap_or(0.0);
+                println!(
+                    "  {:<16} -{:>4.1} of {:>2}   {}",
+                    c["name"].as_str().unwrap_or("?"),
+                    pen,
+                    w,
+                    c["detail"].as_str().unwrap_or("")
+                );
+            }
+            let roots = v["roots"].as_array().cloned().unwrap_or_default();
+            if roots.len() > 1 {
+                println!();
+                for r in roots {
+                    println!("  {:>3}  {}", r["score"], r["path"].as_str().unwrap_or("?"));
+                }
+            }
+            let hist: Vec<u64> = v["history"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|e| e.get(1).and_then(Value::as_u64))
+                .collect();
+            if hist.len() > 1 {
+                let s: Vec<String> = hist.iter().rev().map(|x| x.to_string()).collect();
+                println!("\nrecent scores  {}", s.join(" → "));
+            }
+        }
+
+        Cmd::Dupes { limit } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("dupes", json!({"limit": limit}))?
+            } else {
+                let (_, db) = open_db()?;
+                let groups = db.rebuild_duplicates()?;
+                let wasted: u64 = groups.iter().map(|g| g.size * g.copies.len() as u64).sum();
+                json!({"groups": groups.len(), "wasted_bytes": wasted,
+                       "top": groups.iter().take(limit).map(|g| json!({"size": g.size, "keep": g.keeper, "copies": g.copies})).collect::<Vec<_>>()})
+            };
+            println!(
+                "{} duplicate groups, {} reclaimable",
+                v["groups"],
+                human_bytes(v["wasted_bytes"].as_u64().unwrap_or(0))
+            );
+            for g in v["top"].as_array().cloned().unwrap_or_default() {
+                println!();
+                println!(
+                    "  keep   {}   ({})",
+                    g["keep"].as_str().unwrap_or("?"),
+                    human_bytes(g["size"].as_u64().unwrap_or(0))
+                );
+                for c in g["copies"].as_array().cloned().unwrap_or_default() {
+                    println!("  copy   {}", c.as_str().unwrap_or("?"));
+                }
+            }
+        }
+
+        Cmd::Versions { limit } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("versions", json!({"limit": limit}))?
+            } else {
+                let (_, db) = open_db()?;
+                let chains = db.rebuild_versions()?;
+                json!({"chains": chains.len(),
+                       "top": chains.iter().take(limit).map(|c| json!({"keep": c.canonical, "older": c.older})).collect::<Vec<_>>()})
+            };
+            println!("{} version chains", v["chains"]);
+            for c in v["top"].as_array().cloned().unwrap_or_default() {
+                println!();
+                println!("  newest {}", c["keep"].as_str().unwrap_or("?"));
+                for o in c["older"].as_array().cloned().unwrap_or_default() {
+                    println!("  older  {}", o.as_str().unwrap_or("?"));
+                }
+            }
+        }
+
+        Cmd::Suggest { limit, state, cmd } => match cmd {
+            None => {
+                let v = if let Some(mut a) = agent() {
+                    a.call("suggest.list", json!({"limit": limit, "state": state}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    let (count, bytes) = db.suggestion_totals()?;
+                    json!({"proposed": count, "est_bytes": bytes, "items": db.list_suggestions(&state, limit)?})
+                };
+                println!(
+                        "{} proposed suggestions, about {} reclaimable. Mode is observe: nothing runs without you.",
+                        v["proposed"],
+                        human_bytes(v["est_bytes"].as_u64().unwrap_or(0))
+                    );
+                for s in v["items"].as_array().cloned().unwrap_or_default() {
+                    println!();
+                    println!(
+                        "  #{:<5} {:<18} {:>9}   tier {}",
+                        s["id"],
+                        s["kind"].as_str().unwrap_or("?"),
+                        human_bytes(s["est_bytes"].as_u64().unwrap_or(0)),
+                        s["risk_tier"]
+                    );
+                    println!("         {}", s["rationale"].as_str().unwrap_or(""));
+                }
+                if v["items"].as_array().map(|a| a.is_empty()).unwrap_or(true) {
+                    println!("  (none — run `filemind analyze` after hashing has finished)");
+                }
+            }
+            Some(SuggestCmd::Dismiss { id }) => {
+                let ok = if let Some(mut a) = agent() {
+                    a.call("suggest.dismiss", json!({"id": id}))?["ok"].as_bool() == Some(true)
+                } else {
+                    let (_, db) = open_db()?;
+                    db.set_suggestion_state(id, "dismissed")?
+                };
+                if ok {
+                    println!("dismissed #{id}");
+                } else {
+                    bail!("no suggestion #{id}");
+                }
+            }
+        },
+
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Start => {
                 if agent().is_some() {
@@ -547,7 +735,7 @@ fn main() -> Result<()> {
 
         Cmd::Dev { cmd } => match cmd {
             DevCmd::Fixture { dir, entries } => {
-                let s = fixture::build(&dir, entries)?;
+                let s = filemind_agent::fixture::build(&dir, entries)?;
                 println!(
                     "fixture at {}: {} files, {} dirs, {} exact-duplicate files, {} version chains, {} links",
                     dir.display(),

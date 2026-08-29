@@ -8,6 +8,7 @@ license.workspace = true
 filemind-core = { path = "../core" }
 anyhow.workspace = true
 rusqlite.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 directories.workspace = true
@@ -15,3 +16,4 @@ chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+chrono.workspace = true

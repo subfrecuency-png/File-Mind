@@ -174,6 +174,58 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 "content_type": meta.content_type, "where_from": meta.where_from, "tags": meta.tags, "extra": meta.extra
             }))
         }
+        "analyze" => {
+            let a = crate::analysis::run(&db)?;
+            Ok(json!({
+                "duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
+                "version_chains": a.version_chains, "suggestions": a.suggestions,
+                "health": a.health, "elapsed_ms": a.elapsed_ms
+            }))
+        }
+        "health" => {
+            let h = filemind_core::health::score(&db.health_inputs(None)?);
+            let mut roots = Vec::new();
+            for r in db.list_roots()? {
+                let rh = filemind_core::health::score(&db.health_inputs(Some(r.root_id))?);
+                roots.push(json!({"path": r.path, "score": rh.score}));
+            }
+            let history = db.health_history(None, 30)?;
+            Ok(json!({"health": h, "roots": roots, "history": history}))
+        }
+        "dupes" => {
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            let groups = db.rebuild_duplicates()?;
+            let wasted: u64 = groups.iter().map(|g| g.size * g.copies.len() as u64).sum();
+            Ok(json!({
+                "groups": groups.len(), "wasted_bytes": wasted,
+                "top": groups.iter().take(limit).map(|g| json!({
+                    "size": g.size, "keep": g.keeper, "copies": g.copies
+                })).collect::<Vec<_>>()
+            }))
+        }
+        "versions" => {
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            let chains = db.rebuild_versions()?;
+            Ok(json!({
+                "chains": chains.len(),
+                "top": chains.iter().take(limit).map(|c| json!({"keep": c.canonical, "older": c.older})).collect::<Vec<_>>()
+            }))
+        }
+        "suggest.list" => {
+            let state = p.get("state").and_then(Value::as_str).unwrap_or("proposed");
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            let (count, bytes) = db.suggestion_totals()?;
+            Ok(
+                json!({"proposed": count, "est_bytes": bytes, "items": db.list_suggestions(state, limit)?}),
+            )
+        }
+        "suggest.dismiss" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!({"ok": db.set_suggestion_state(id, "dismissed")?}))
+        }
         other => anyhow::bail!("unknown method {other}"),
     }
 }

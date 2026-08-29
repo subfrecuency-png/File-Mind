@@ -58,13 +58,19 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
             max_wall: Some(sched.hash_budget),
         },
     )?;
+    let a = crate::analysis::run(db)?;
     Ok(format!(
-        "roots {}  files {}  changes {}  hashed {} (+{} pending)",
+        "roots {}  files {}  changes {}  hashed {} (+{} pending)  health {}  dup groups {} ({})  version chains {}  suggestions {}",
         scans.len(),
         files,
         changed,
         h.hashed,
-        h.remaining
+        h.remaining,
+        a.health.score,
+        a.duplicate_groups,
+        filemind_core::health::human(a.duplicate_bytes),
+        a.version_chains,
+        a.suggestions
     ))
 }
 

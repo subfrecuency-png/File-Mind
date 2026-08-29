@@ -1,7 +1,9 @@
 //! SQLite system of record (WAL + FTS5) and, later, the LanceDB vector store.
 
+pub mod analysis;
 pub mod inventory;
 
+pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use inventory::{Root, UpsertStats};
 
 use anyhow::{Context, Result};
@@ -14,6 +16,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0002_scan_seq",
         include_str!("../migrations/0002_scan_seq.sql"),
+    ),
+    (
+        "0003_suggestions",
+        include_str!("../migrations/0003_suggestions.sql"),
     ),
 ];
 
@@ -166,14 +172,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 2);
+            assert_eq!(db.schema_version().unwrap(), 3);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }
