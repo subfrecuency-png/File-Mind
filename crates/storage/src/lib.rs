@@ -50,19 +50,26 @@ pub struct Db {
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let mut conn =
+            Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        // Writers start with BEGIN IMMEDIATE so a second writer waits on the
+        // busy timeout instead of failing with SQLITE_BUSY when it tries to
+        // upgrade a deferred read transaction (the classic WAL "database is
+        // locked" with several connections).
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
