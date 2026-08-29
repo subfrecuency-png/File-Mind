@@ -68,7 +68,7 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
     )?;
     let a = crate::analysis::run(db)?;
     Ok(format!(
-        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  health {}  dup groups {} ({})  version chains {}  suggestions {}",
+        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  health {}  dup groups {} ({})  version chains {}  suggestions {}  projects {}",
         scans.len(),
         files,
         changed,
@@ -81,7 +81,8 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
         a.duplicate_groups,
         filemind_core::health::human(a.duplicate_bytes),
         a.version_chains,
-        a.suggestions
+        a.suggestions,
+        a.projects
     ))
 }
 

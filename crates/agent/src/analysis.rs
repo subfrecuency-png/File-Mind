@@ -11,6 +11,7 @@ pub struct AnalysisOutcome {
     pub duplicate_bytes: u64,
     pub version_chains: usize,
     pub suggestions: usize,
+    pub projects: usize,
     pub health: Health,
     pub elapsed_ms: u128,
 }
@@ -20,12 +21,14 @@ pub fn run(db: &Db) -> Result<AnalysisOutcome> {
     let dups = db.rebuild_duplicates()?;
     let chains = db.rebuild_versions()?;
     let suggestions = db.refresh_suggestions(&dups, &chains)?;
+    let projects = db.rebuild_projects()?.len();
     let health = db.refresh_health()?;
     Ok(AnalysisOutcome {
         duplicate_groups: dups.len(),
         duplicate_bytes: dups.iter().map(|g| g.size * g.copies.len() as u64).sum(),
         version_chains: chains.len(),
         suggestions,
+        projects,
         health,
         elapsed_ms: started.elapsed().as_millis(),
     })

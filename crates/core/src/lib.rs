@@ -15,6 +15,7 @@ pub mod extract;
 pub mod health;
 pub mod mode;
 pub mod model;
+pub mod projects;
 pub mod scanner;
 pub mod txn;
 pub mod versions;

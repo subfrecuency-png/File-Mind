@@ -3,9 +3,11 @@
 pub mod analysis;
 pub mod classify;
 pub mod inventory;
+pub mod projects;
 
 pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use inventory::{Root, UpsertStats};
+pub use projects::ProjectRow;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -25,6 +27,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0004_classify",
         include_str!("../migrations/0004_classify.sql"),
+    ),
+    (
+        "0005_projects",
+        include_str!("../migrations/0005_projects.sql"),
     ),
 ];
 
@@ -177,14 +183,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 4);
+            assert_eq!(db.schema_version().unwrap(), 5);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 4);
+        assert_eq!(db.schema_version().unwrap(), 5);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }

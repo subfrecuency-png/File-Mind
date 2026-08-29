@@ -180,7 +180,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             let a = crate::analysis::run(&db)?;
             Ok(json!({
                 "duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
-                "version_chains": a.version_chains, "suggestions": a.suggestions,
+                "version_chains": a.version_chains, "suggestions": a.suggestions, "projects": a.projects,
                 "health": a.health, "elapsed_ms": a.elapsed_ms
             }))
         }
@@ -333,6 +333,41 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 .and_then(Value::as_i64)
                 .ok_or_else(|| anyhow::anyhow!("id required"))?;
             Ok(json!({"ok": db.remove_rule(id)?}))
+        }
+        "projects.list" => {
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(30) as usize;
+            Ok(json!(db.list_projects(limit)?))
+        }
+        "projects.show" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(30) as usize;
+            let Some(pr) = db.project(id)? else {
+                anyhow::bail!("no project #{id}")
+            };
+            Ok(json!({
+                "project": pr,
+                "files": db.project_files(id, limit)?.into_iter().map(|(p, m, s)| json!({"path": p, "mtime": m, "size": s})).collect::<Vec<_>>(),
+                "categories": db.project_categories(id)?.into_iter().map(|(c, n)| json!({"category": c, "files": n})).collect::<Vec<_>>()
+            }))
+        }
+        "projects.rename" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let name = p.get("name").and_then(Value::as_str);
+            Ok(json!({"ok": db.rename_project(id, name)?}))
+        }
+        "projects.of" => {
+            let path = PathBuf::from(
+                p.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("path required"))?,
+            );
+            Ok(json!(db.project_of_path(&path)?))
         }
         other => anyhow::bail!("unknown method {other}"),
     }

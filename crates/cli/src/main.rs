@@ -88,6 +88,16 @@ enum Cmd {
     },
     /// How many files of each category, sensitive files, pending, and your rules.
     Categories,
+    /// Detected projects, most active first.
+    Projects {
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+    /// One project: its files, categories, dates. Or rename it.
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
     /// Observe-mode suggestions. Nothing is ever executed from here.
     Suggest {
         #[arg(long, default_value_t = 20)]
@@ -138,6 +148,20 @@ enum ClassifyCmd {
     },
     /// Delete a rule by id (see `filemind categories`).
     Forget { rule_id: i64 },
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// Show a project's files (newest first) and category mix.
+    Show {
+        id: i64,
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+    },
+    /// Give a project your own name (kept across re-analysis).
+    Rename { id: i64, name: String },
+    /// Which project does this file belong to?
+    Of { path: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -578,17 +602,18 @@ fn main() -> Result<()> {
                 let (_, db) = open_db()?;
                 let a = filemind_agent::analysis::run(&db)?;
                 json!({"duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
-                       "version_chains": a.version_chains, "suggestions": a.suggestions,
+                       "version_chains": a.version_chains, "suggestions": a.suggestions, "projects": a.projects,
                        "health": a.health, "elapsed_ms": a.elapsed_ms})
             };
             let g = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
             println!(
-                "health {}  duplicate groups {} ({} reclaimable)  version chains {}  suggestions {}  in {:.1}s",
+                "health {}  duplicate groups {} ({} reclaimable)  version chains {}  suggestions {}  projects {}  in {:.1}s",
                 v["health"]["score"],
                 g("duplicate_groups"),
                 human_bytes(g("duplicate_bytes")),
                 g("version_chains"),
                 g("suggestions"),
+                g("projects"),
                 g("elapsed_ms") as f64 / 1000.0
             );
         }
@@ -928,6 +953,155 @@ fn main() -> Result<()> {
                 }
             }
         }
+
+        Cmd::Projects { limit } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("projects.list", json!({"limit": limit}))?
+            } else {
+                let (_, db) = open_db()?;
+                json!(db.list_projects(limit)?)
+            };
+            let items = v.as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                println!("no projects yet — run `filemind analyze` after a scan");
+            }
+            for p in items {
+                let name = p["name"]
+                    .as_str()
+                    .or(p["suggested_name"].as_str())
+                    .unwrap_or("?");
+                let end = p["end_ts"]
+                    .as_i64()
+                    .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                    .map(|t| {
+                        t.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "  #{:<5} {:<8} {:<36} {:>6} files  {:>9}  last {}  {}",
+                    p["project_id"],
+                    p["status"].as_str().unwrap_or("?"),
+                    if name.chars().count() > 36 {
+                        format!("{}…", name.chars().take(35).collect::<String>())
+                    } else {
+                        name.to_string()
+                    },
+                    p["file_count"],
+                    human_bytes(p["bytes"].as_u64().unwrap_or(0)),
+                    end,
+                    p["kind"].as_str().unwrap_or("")
+                );
+            }
+        }
+
+        Cmd::Project { cmd } => match cmd {
+            ProjectCmd::Show { id, limit } => {
+                let v = if let Some(mut a) = agent() {
+                    a.call("projects.show", json!({"id": id, "limit": limit}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    let Some(pr) = db.project(id)? else {
+                        bail!("no project #{id}")
+                    };
+                    json!({
+                        "project": pr,
+                        "files": db.project_files(id, limit)?.into_iter().map(|(p, m, s)| json!({"path": p, "mtime": m, "size": s})).collect::<Vec<_>>(),
+                        "categories": db.project_categories(id)?.into_iter().map(|(c, n)| json!({"category": c, "files": n})).collect::<Vec<_>>()
+                    })
+                };
+                let p = &v["project"];
+                let name = p["name"]
+                    .as_str()
+                    .or(p["suggested_name"].as_str())
+                    .unwrap_or("?");
+                let fmt = |t: Option<i64>| {
+                    t.and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                        .map(|t| {
+                            t.with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d")
+                                .to_string()
+                        })
+                        .unwrap_or_default()
+                };
+                println!(
+                    "{name}   [{} · {}]",
+                    p["kind"].as_str().unwrap_or(""),
+                    p["status"].as_str().unwrap_or("")
+                );
+                if p["name"].is_string() {
+                    println!(
+                        "suggested    {}",
+                        p["suggested_name"].as_str().unwrap_or("")
+                    );
+                }
+                println!("where        {}", p["key"].as_str().unwrap_or(""));
+                println!(
+                    "files        {}  ({})",
+                    p["file_count"],
+                    human_bytes(p["bytes"].as_u64().unwrap_or(0))
+                );
+                println!(
+                    "active       {} → {}",
+                    fmt(p["start_ts"].as_i64()),
+                    fmt(p["end_ts"].as_i64())
+                );
+                let cats: Vec<String> = v["categories"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|c| format!("{} {}", c["files"], c["category"].as_str().unwrap_or("?")))
+                    .collect();
+                if !cats.is_empty() {
+                    println!("contains     {}", cats.join(", "));
+                }
+                println!();
+                for f in v["files"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "  {}  {}",
+                        fmt(f["mtime"].as_i64()),
+                        f["path"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+            ProjectCmd::Rename { id, name } => {
+                let ok = if let Some(mut a) = agent() {
+                    a.call("projects.rename", json!({"id": id, "name": name}))?["ok"].as_bool()
+                        == Some(true)
+                } else {
+                    let (_, db) = open_db()?;
+                    db.rename_project(id, Some(&name))?
+                };
+                if ok {
+                    println!("project #{id} is now \"{name}\"");
+                } else {
+                    bail!("no project #{id}");
+                }
+            }
+            ProjectCmd::Of { path } => {
+                let path = path.canonicalize().unwrap_or(path);
+                let v = if let Some(mut a) = agent() {
+                    a.call("projects.of", json!({"path": path}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(db.project_of_path(&path)?)
+                };
+                if v.is_null() {
+                    println!("{} is not part of any detected project", path.display());
+                } else {
+                    println!(
+                        "#{}  {}",
+                        v["project_id"],
+                        v["name"]
+                            .as_str()
+                            .or(v["suggested_name"].as_str())
+                            .unwrap_or("?")
+                    );
+                }
+            }
+        },
 
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Start => {

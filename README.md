@@ -4,7 +4,7 @@
 
 > Organize · Remember · Recover · Protect
 
-Status: **Phase 4 — it knows what things are.** Live-watched inventory, health score, duplicates, version chains, Observe-mode suggestions, and now a rule-based classifier with text extraction (PDF/DOCX/PPTX/XLSX/text/code) feeding full-content search, a sensitive-content detector, and corrections that become rules. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
+Status: **Phase 5 — it knows what belongs together.** Project detection groups files into repos (marker files), project folders (descending through container folders like Clients/), and sessions/topics of loose files by when they were touched and what they are called; names you give projects survive re-analysis. Plus everything from Phase 4: Live-watched inventory, health score, duplicates, version chains, Observe-mode suggestions, and now a rule-based classifier with text extraction (PDF/DOCX/PPTX/XLSX/text/code) feeding full-content search, a sensitive-content detector, and corrections that become rules. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture and the phased plan.
 
 ## Layout
 
@@ -41,6 +41,10 @@ filemind classify --minutes 5         # categorise + extract text (throttled); s
 filemind categories                   # files per category, sensitive count, your rules
 filemind classify show <file>         # category, confidence, and the signals behind it
 filemind classify set <file> invoice --scope folder   # correct it; --scope folder|ext|name makes a rule
+filemind projects                     # detected projects, most active first
+filemind project show 3               # a project's files, dates and category mix
+filemind project rename 3 "Calcium deal"
+filemind project of ~/Downloads/x.pdf # which project a file belongs to
 filemind agent start                  # run the agent in the foreground (watcher + scheduler + socket)
 filemind agent install                # or: start filemind-agent at login (launchd)
 filemind agent status                 # is it running? watcher counters
