@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 filemind-core = { path = "../core" }
+blake3.workspace = true
 filemind-storage = { path = "../storage" }
 filemind-ai = { path = "../ai" }
 anyhow.workspace = true

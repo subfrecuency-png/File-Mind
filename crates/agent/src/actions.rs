@@ -48,6 +48,9 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
     m.rule_id = Some(format!("suggestion:{}", s.id));
     match s.kind.as_str() {
         "trash_duplicates" => {
+            if let Some(k) = s.subject["keep"].as_str() {
+                m.keeps.push(PathBuf::from(k));
+            }
             for p in paths(&s.subject["trash"]) {
                 m.steps.push(Step::Trash {
                     path: p,
@@ -66,6 +69,7 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
                 .parent()
                 .unwrap_or(Path::new("/"))
                 .join(format!("{stem} versions"));
+            m.keeps.push(keep.clone());
             for p in paths(&s.subject["older"]) {
                 let name = p
                     .file_name()
@@ -123,11 +127,34 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
     Ok(m)
 }
 
+fn fingerprint(m: &Manifest) -> String {
+    let mut h = blake3::Hasher::new();
+    for s in &m.steps {
+        match s {
+            Step::Move { from, to, .. } => {
+                h.update(b"M");
+                h.update(from.to_string_lossy().as_bytes());
+                h.update(b"\0");
+                h.update(to.to_string_lossy().as_bytes());
+            }
+            Step::Trash { path, .. } => {
+                h.update(b"T");
+                h.update(path.to_string_lossy().as_bytes());
+            }
+        }
+        h.update(b"\n");
+    }
+    h.finalize().to_hex()[..16].to_string()
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct Plan {
     pub txn_id: String,
     pub steps: usize,
     pub diff: String,
+    /// Content hash of the steps; `apply` uses it to confirm the plan the
+    /// user approved is the plan that runs.
+    pub fingerprint: String,
     pub problems: Vec<String>,
     pub risk_tier: u8,
     pub mode: Mode,
@@ -149,6 +176,7 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, suggestion_id: i64) -> Result<(Man
         txn_id: m.txn_id.clone(),
         steps: m.steps.len(),
         diff: m.diff(),
+        fingerprint: fingerprint(&m),
         problems,
         risk_tier: m.risk_tier.as_u8(),
         mode: m.mode,
@@ -165,15 +193,32 @@ pub struct Applied {
 }
 
 /// Validate, gate on mode/approval, execute, and record effects.
+///
+/// `previewed` is the (txn_id, fingerprint) the user saw from `plan`; the
+/// re-planned steps must match it exactly, and the transaction then runs
+/// under that id so the preview and the history agree.
 pub fn apply(
     adapter: &dyn OsAdapter,
     db: &Db,
     suggestion_id: i64,
     approved: bool,
+    previewed: Option<(&str, &str)>,
 ) -> Result<Applied> {
     let (mut m, plan) = plan(adapter, db, suggestion_id)?;
     if !plan.problems.is_empty() {
         bail!("refusing to run:\n  {}", plan.problems.join("\n  "));
+    }
+    if let Some((id, fp)) = previewed {
+        if fp != plan.fingerprint {
+            bail!("the plan changed since it was previewed — run `filemind suggest plan {suggestion_id}` again");
+        }
+        if !id.starts_with("txn_") || id.len() > 64 {
+            bail!("bad transaction id");
+        }
+        if db.load_txn(id)?.is_some() {
+            bail!("transaction {id} already exists");
+        }
+        m.txn_id = id.to_string();
     }
     if let Err(why) = txn::permitted(m.mode, &m, approved) {
         bail!("{why}");

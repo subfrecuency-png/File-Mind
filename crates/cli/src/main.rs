@@ -825,15 +825,21 @@ fn run() -> Result<()> {
                         return Ok(());
                     }
                 }
+                let txn_id = plan["txn_id"].as_str().unwrap_or_default().to_string();
+                let fp = plan["fingerprint"].as_str().unwrap_or_default().to_string();
                 let v = if let Some(mut a) = agent() {
-                    a.call("suggest.apply", json!({"id": id, "approved": true}))?
+                    a.call(
+                        "suggest.apply",
+                        json!({"id": id, "approved": true, "txn_id": txn_id, "fingerprint": fp}),
+                    )?
                 } else {
                     let (_, db) = open_db()?;
                     json!(filemind_agent::actions::apply(
                         adapter.as_ref(),
                         &db,
                         id,
-                        true
+                        true,
+                        Some((txn_id.as_str(), fp.as_str()))
                     )?)
                 };
                 println!(

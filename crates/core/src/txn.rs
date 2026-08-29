@@ -143,6 +143,11 @@ pub struct Manifest {
     pub created: DateTime<Utc>,
     pub steps: Vec<Step>,
     pub rationale: String,
+    /// Files this transaction deliberately leaves in place (e.g. the kept
+    /// copy of a duplicate group). Shown in the preview so the user can judge
+    /// the choice; never touched by execute/undo.
+    #[serde(default)]
+    pub keeps: Vec<PathBuf>,
 }
 
 impl Manifest {
@@ -166,12 +171,16 @@ impl Manifest {
             created: now,
             steps: Vec::new(),
             rationale: rationale.into(),
+            keeps: Vec::new(),
         }
     }
 
     /// Human-readable dry-run diff shown in the approval queue.
     pub fn diff(&self) -> String {
         let mut out = String::new();
+        for k in &self.keeps {
+            out.push_str(&format!("     KEEP   {}\n", k.display()));
+        }
         for (i, s) in self.steps.iter().enumerate() {
             let line = match s {
                 Step::Move { from, to, .. } => format!(

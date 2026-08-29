@@ -383,11 +383,19 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 .and_then(Value::as_i64)
                 .ok_or_else(|| anyhow::anyhow!("id required"))?;
             let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            let previewed = match (
+                p.get("txn_id").and_then(Value::as_str),
+                p.get("fingerprint").and_then(Value::as_str),
+            ) {
+                (Some(t), Some(f)) => Some((t, f)),
+                _ => None,
+            };
             Ok(json!(crate::actions::apply(
                 ctx.adapter.as_ref(),
                 &db,
                 id,
-                approved
+                approved,
+                previewed
             )?))
         }
         "txn.list" => {
