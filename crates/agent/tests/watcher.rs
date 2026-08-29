@@ -103,3 +103,27 @@ fn watcher_keeps_index_current() {
     th.join().unwrap();
     assert!(stats.raw_events.load(Ordering::Relaxed) > 0);
 }
+
+#[test]
+fn root_directory_events_do_not_rescan() {
+    use filemind_agent::incremental::apply_changes;
+    use filemind_core::watch::Change;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(root.join("d")).unwrap();
+    for i in 0..50 {
+        std::fs::write(root.join("d").join(format!("{i}.txt")), b"x").unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let adapter = filemind_adapter_macos::MacAdapter;
+    let db = Db::open_in_memory().unwrap();
+    pipeline::scan_root(&adapter, &db, &root).unwrap();
+    let st = apply_changes(&adapter, &db, &[Change::Upsert(root.clone())]).unwrap();
+    assert_eq!(
+        st.upserted, 0,
+        "an event on the root itself must not re-enumerate it"
+    );
+    // an event on a known subdirectory upserts just that directory row
+    let st = apply_changes(&adapter, &db, &[Change::Upsert(root.join("d"))]).unwrap();
+    assert_eq!(st.upserted, 1);
+}

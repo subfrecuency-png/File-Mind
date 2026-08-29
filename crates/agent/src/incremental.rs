@@ -97,6 +97,12 @@ fn reconcile(
         st.ignored += 1;
         return Ok(());
     }
+    // A registered root is never a row in the index; FSEvents reports the
+    // root directory itself whenever a child changes, and the child events
+    // arrive on their own.
+    if db.list_roots()?.iter().any(|r| r.path == path) {
+        return Ok(());
+    }
     match adapter.stat(path)? {
         None => {
             st.missing += db.mark_missing_path(path, ts, SOURCE)?;
