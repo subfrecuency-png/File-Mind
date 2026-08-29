@@ -220,7 +220,10 @@ impl Db {
         let duplicate_bytes = q1(
             "SELECT SUM(b.size) FROM files f JOIN blobs b ON b.blob_id=f.blob_id
              JOIN duplicate_groups g ON g.blob_id=f.blob_id
-             WHERE f.status='present' AND f.kind='file' AND f.file_id <> g.keeper_file_id {scope}",
+             WHERE f.status='present' AND f.kind='file' AND f.file_id <> g.keeper_file_id
+               AND f.path NOT LIKE '%/node_modules/%' AND f.path NOT LIKE '%/.git/%'
+               AND f.path NOT LIKE '%/.next/%' AND f.path NOT LIKE '%/target/%'
+               AND f.path NOT LIKE '%/.cache/%' AND f.path NOT LIKE '%/venv/%' {scope}",
         )? as u64;
         let now = Utc::now().timestamp();
         let stale_cut = now - STALE_DAYS * 86_400;
@@ -325,6 +328,15 @@ impl Db {
                    state = CASE WHEN suggestions.state = 'dismissed' THEN 'dismissed' ELSE 'proposed' END",
             )?;
             for g in dups {
+                // Copies inside dependency/build trees are not the user's mess to
+                // sort file-by-file; a duplicated project is handled as a whole (Phase 6).
+                if filemind_core::scanner::in_noise_dir(&g.keeper)
+                    || g.copies
+                        .iter()
+                        .any(|c| filemind_core::scanner::in_noise_dir(c))
+                {
+                    continue;
+                }
                 let saved = g.size * g.copies.len() as u64;
                 if saved < 64 * 1024 {
                     continue; // not worth a suggestion
@@ -347,6 +359,9 @@ impl Db {
                 n += 1;
             }
             for c in chains {
+                if filemind_core::scanner::in_noise_dir(&c.canonical) {
+                    continue;
+                }
                 up.execute(params![
                     "collapse_versions",
                     c.canonical.to_string_lossy().to_string(),

@@ -52,19 +52,7 @@ const MARKER_EXTS: &[&str] = &[
     "fig",
     "sketch",
 ];
-const SKIP_DIRS: &[&str] = &[
-    "node_modules",
-    ".git",
-    "target",
-    "build",
-    "dist",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".cache",
-    "Library",
-    ".Trash",
-];
+const SKIP_DIRS: &[&str] = crate::scanner::NOISE_DIRS;
 const STOPWORDS: &[&str] = &[
     "the",
     "and",
@@ -192,13 +180,23 @@ fn tokens(name: &str) -> Vec<String> {
         .unwrap_or_default();
     let mut out: Vec<String> = Vec::new();
     for t in stem.split(|c: char| !c.is_alphanumeric()).filter(|t| {
-        t.len() >= 3 && !t.chars().all(|c| c.is_ascii_digit()) && !STOPWORDS.contains(t)
+        t.len() >= 3
+            && !t.chars().all(|c| c.is_ascii_digit())
+            && !looks_like_id(t)
+            && !STOPWORDS.contains(t)
     }) {
         if !out.iter().any(|o| o == t) {
             out.push(t.to_string());
         }
     }
     out
+}
+
+/// Hex hashes, UUID fragments, base-36 ids: ≥ 8 chars, all hex, with digits in them.
+fn looks_like_id(t: &str) -> bool {
+    t.len() >= 8
+        && t.chars().all(|c| c.is_ascii_hexdigit())
+        && t.chars().any(|c| c.is_ascii_digit())
 }
 
 /// Longest run of leading words shared by at least 60 % of the names
@@ -237,7 +235,9 @@ fn common_prefix(names: &[String]) -> Option<String> {
             .filter(|(_, n)| *n >= need)
             .max_by_key(|(_, n)| *n)
         {
-            Some((w, _)) if !w.chars().all(|c| c.is_ascii_digit()) => prefix.push(w),
+            Some((w, _)) if !w.chars().all(|c| c.is_ascii_digit()) && prefix.len() < 4 => {
+                prefix.push(w)
+            }
             _ => break,
         }
     }
@@ -323,14 +323,18 @@ pub fn detect(root: &Path, files: &[FileIn], now: i64) -> Vec<Project> {
         if claimed_dirs.iter().any(|c| d.starts_with(c)) {
             continue;
         }
-        let idxs: Vec<usize> = (0..files.len())
-            .filter(|&i| !claimed[i] && files[i].path.starts_with(&d))
-            .collect();
+        // claim the whole subtree, but generated/dependency files are not members
+        let mut idxs: Vec<usize> = Vec::new();
+        for (i, f) in files.iter().enumerate() {
+            if !claimed[i] && f.path.starts_with(&d) {
+                claimed[i] = true;
+                if !in_skipped(&f.path, root) {
+                    idxs.push(i);
+                }
+            }
+        }
         if idxs.is_empty() {
             continue;
-        }
-        for &i in &idxs {
-            claimed[i] = true;
         }
         let members: Vec<&FileIn> = idxs.iter().map(|&i| &files[i]).collect();
         let name = pretty_name(
@@ -587,8 +591,8 @@ mod tests {
             .map(|p| (p.suggested_name.as_str(), p.kind, p.files.len()))
             .collect();
         assert!(
-            names.contains(&("Site", ProjectKind::Marker, 3)),
-            "{names:?}"
+            names.contains(&("Site", ProjectKind::Marker, 2)),
+            "node_modules excluded from members: {names:?}"
         );
         assert!(
             names.contains(&("Taxes 2025", ProjectKind::Folder, 5)),

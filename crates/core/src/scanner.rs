@@ -12,6 +12,49 @@ use std::path::{Path, PathBuf};
 pub const IGNORE_FILE: &str = ".filemindignore";
 pub const DEFAULT_MAX_DEPTH: usize = 64;
 
+/// Directories that are machine-generated or dependency caches. They are still
+/// indexed (so search and recovery see them) but never become projects, never
+/// produce duplicate/version suggestions, and never count against health.
+pub const NOISE_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".hg",
+    ".svn",
+    "target",
+    "build",
+    "dist",
+    "out",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".parcel-cache",
+    ".cache",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".gradle",
+    "Pods",
+    "DerivedData",
+    "vendor",
+    "bower_components",
+    ".Trash",
+    "Library",
+    ".idea",
+    ".vscode",
+    "coverage",
+    ".tox",
+    ".terraform",
+    ".serverless",
+];
+
+/// True if any path component is a noise directory.
+pub fn in_noise_dir(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| NOISE_DIRS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanOpts {
     pub max_depth: usize,
