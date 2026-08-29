@@ -333,20 +333,42 @@ impl Db {
 
     /// Record a content hash for a file, creating the blob row if new.
     pub fn set_file_hash(&self, file_id: &str, blake3: &str, size: u64) -> Result<i64> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO blobs(blake3, size) VALUES (?1, ?2)",
-            params![blake3, size as i64],
-        )?;
-        let blob_id: i64 = self.conn.query_row(
+        self.set_file_hashes(&[(file_id.to_string(), blake3.to_string(), size)])?;
+        Ok(self.conn.query_row(
             "SELECT blob_id FROM blobs WHERE blake3 = ?1",
             [blake3],
             |r| r.get(0),
-        )?;
-        self.conn.execute(
-            "UPDATE files SET blob_id = ?2 WHERE file_id = ?1",
-            params![file_id, blob_id],
-        )?;
-        Ok(blob_id)
+        )?)
+    }
+
+    /// Record many `(file_id, blake3, size)` results in one transaction.
+    pub fn set_file_hashes(&self, results: &[(String, String, u64)]) -> Result<()> {
+        if results.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut ins =
+                tx.prepare_cached("INSERT OR IGNORE INTO blobs(blake3, size) VALUES (?1, ?2)")?;
+            let mut upd = tx.prepare_cached(
+                "UPDATE files SET blob_id = (SELECT blob_id FROM blobs WHERE blake3 = ?2) WHERE file_id = ?1",
+            )?;
+            for (file_id, blake3, size) in results {
+                ins.execute(params![blake3, *size as i64])?;
+                upd.execute(params![file_id, blake3])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Number of present files still lacking a content hash.
+    pub fn count_without_hash(&self) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE kind = 'file' AND status = 'present' AND blob_id IS NULL",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? as u64)
     }
 
     pub fn file_status(&self, file_id: FileId) -> Result<Option<(PathBuf, String)>> {

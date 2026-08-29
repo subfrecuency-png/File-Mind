@@ -143,53 +143,74 @@ pub struct HashOutcome {
     pub elapsed_ms: u128,
 }
 
-/// Hash files that have no content hash yet, smallest first, sleeping between
-/// files so that busy time stays around `duty_cycle` of wall time.
+/// Hash files that have no content hash yet, smallest first. Results are
+/// written in batches (one SQLite transaction per batch) and the loop sleeps
+/// between batches so busy time stays around `duty_cycle` of wall time.
 pub fn hash_pending(db: &Db, opts: HashOpts) -> Result<HashOutcome> {
     let started = Instant::now();
     let mut out = HashOutcome::default();
     let duty = opts.duty_cycle.clamp(0.05, 1.0);
     let mut busy = Duration::ZERO;
+    // A batch ends after this many files or this many bytes, whichever first,
+    // so big files still get throttled between them.
+    const BATCH_FILES: usize = 1_000;
+    const BATCH_BYTES: u64 = 256 << 20;
 
     'outer: loop {
-        let pending = db.files_without_hash(500)?;
+        let pending = db.files_without_hash(BATCH_FILES)?;
         if pending.is_empty() {
             break;
         }
+        let t = Instant::now();
+        let mut results: Vec<(String, String, u64)> = Vec::with_capacity(pending.len());
+        let mut batch_bytes = 0u64;
+        let mut batch_ok = 0u64;
         for (file_id, path, size) in pending {
-            if opts.max_files > 0 && out.hashed as usize >= opts.max_files {
-                break 'outer;
+            if opts.max_files > 0 && out.hashed as usize + results.len() >= opts.max_files {
+                break;
             }
             if let Some(w) = opts.max_wall {
                 if started.elapsed() >= w {
-                    break 'outer;
+                    break;
                 }
             }
-            let t = Instant::now();
             match hash_file(&path) {
                 Ok(h) => {
-                    db.set_file_hash(&file_id, &h, size)?;
-                    out.hashed += 1;
                     out.bytes += size;
+                    batch_ok += 1;
+                    results.push((file_id, h, size));
                 }
                 Err(e) => {
                     tracing::debug!(path = %path.display(), error = %e, "hash failed");
-                    // Record an empty-hash sentinel so we don't retry forever this pass.
-                    db.set_file_hash(&file_id, &format!("err:{}", file_id), size)?;
+                    // Sentinel so the file is not retried every pass; a proper
+                    // hash_error column replaces this later.
+                    results.push((file_id.clone(), format!("err:{file_id}"), size));
                     out.errors += 1;
                 }
             }
-            let work = t.elapsed();
-            busy += work;
-            // Sleep so that busy / (busy + idle) ≈ duty.
-            let target_wall = busy.mul_f32(1.0 / duty);
-            let wall = started.elapsed();
-            if target_wall > wall {
-                std::thread::sleep((target_wall - wall).min(Duration::from_millis(250)));
+            batch_bytes += size;
+            if batch_bytes >= BATCH_BYTES {
+                break;
             }
         }
+        let n = results.len();
+        let stop = n == 0
+            || (opts.max_files > 0 && out.hashed as usize + n >= opts.max_files)
+            || opts.max_wall.is_some_and(|w| started.elapsed() >= w);
+        db.set_file_hashes(&results)?;
+        out.hashed += batch_ok;
+        busy += t.elapsed();
+        if stop {
+            break 'outer;
+        }
+        // Sleep so that busy / (busy + idle) ≈ duty.
+        let target_wall = busy.mul_f32(1.0 / duty);
+        let wall = started.elapsed();
+        if target_wall > wall {
+            std::thread::sleep((target_wall - wall).min(Duration::from_secs(5)));
+        }
     }
-    out.remaining = db.files_without_hash(1).map(|v| v.len() as u64)?;
+    out.remaining = db.count_without_hash()?;
     out.elapsed_ms = started.elapsed().as_millis();
     Ok(out)
 }

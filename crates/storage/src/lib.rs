@@ -21,11 +21,27 @@ const MIGRATIONS: &[(&str, &str)] = &[
 /// macOS `~/Library/Application Support/FileMind/filemind.db`,
 /// Windows `%LOCALAPPDATA%\FileMind\filemind.db`.
 pub fn default_db_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("ai", "FileMind", "FileMind")
+    let dirs = directories::ProjectDirs::from("", "", "FileMind")
         .context("could not resolve a per-user data directory")?;
-    let dir = dirs.data_local_dir();
-    std::fs::create_dir_all(dir)?;
-    Ok(dir.join("filemind.db"))
+    let dir = dirs.data_local_dir().to_path_buf();
+    std::fs::create_dir_all(&dir)?;
+    let db = dir.join("filemind.db");
+    // Early builds wrote to a qualifier-prefixed folder on macOS; adopt it once.
+    if !db.exists() {
+        if let Some(legacy) = directories::ProjectDirs::from("ai", "FileMind", "FileMind") {
+            let old = legacy.data_local_dir().join("filemind.db");
+            if old != db && old.exists() {
+                for suffix in ["", "-wal", "-shm"] {
+                    let from = PathBuf::from(format!("{}{suffix}", old.display()));
+                    if from.exists() {
+                        std::fs::rename(&from, PathBuf::from(format!("{}{suffix}", db.display())))?;
+                    }
+                }
+                tracing::info!(from = %old.display(), to = %db.display(), "moved database");
+            }
+        }
+    }
+    Ok(db)
 }
 
 pub struct Db {
