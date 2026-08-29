@@ -447,6 +447,13 @@ pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Res
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // BSD/macOS: an accepted socket inherits the listener's
+                // non-blocking flag; a blocking read there returns WouldBlock
+                // and would look like end-of-stream.
+                if let Err(e) = stream.set_nonblocking(false) {
+                    tracing::warn!(error = %e, "could not make connection blocking");
+                    continue;
+                }
                 let ctx = ctx.clone();
                 std::thread::spawn(move || {
                     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
