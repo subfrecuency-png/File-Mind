@@ -74,7 +74,9 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        // Generous: background jobs would rather wait a minute than fail; the
+        // agent additionally serialises its own heavy jobs (agent::jobs).
+        conn.busy_timeout(std::time::Duration::from_secs(60))?;
         // Writers start with BEGIN IMMEDIATE so a second writer waits on the
         // busy timeout instead of failing with SQLITE_BUSY when it tries to
         // upgrade a deferred read transaction (the classic WAL "database is

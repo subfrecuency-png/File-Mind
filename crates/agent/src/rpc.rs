@@ -107,6 +107,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({"removed": db.remove_root(&path)?}))
         }
         "scan" => {
+            let _slot = crate::jobs::heavy();
             let targets: Vec<PathBuf> = match p.get("path").and_then(Value::as_str) {
                 Some(s) => vec![PathBuf::from(s).canonicalize()?],
                 None => db.list_roots()?.into_iter().map(|r| r.path).collect(),
@@ -125,6 +126,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             Ok(json!(out))
         }
         "hash" => {
+            let _slot = crate::jobs::heavy();
             let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
             let minutes = p.get("minutes").and_then(Value::as_u64);
             let o = pipeline::hash_pending(
@@ -177,6 +179,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             }))
         }
         "analyze" => {
+            let _slot = crate::jobs::heavy();
             let a = crate::analysis::run(&db)?;
             Ok(json!({
                 "duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
@@ -229,6 +232,7 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             Ok(json!({"ok": db.set_suggestion_state(id, "dismissed")?}))
         }
         "classify.run" => {
+            let _slot = crate::jobs::heavy();
             let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
             let minutes = p.get("minutes").and_then(Value::as_u64);
             let names_only = p

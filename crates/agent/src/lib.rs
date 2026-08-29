@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod classifier;
 pub mod fixture;
 pub mod incremental;
+pub mod jobs;
 pub mod pipeline;
 pub mod platform;
 pub mod rpc;

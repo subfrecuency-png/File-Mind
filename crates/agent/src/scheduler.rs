@@ -42,6 +42,7 @@ pub fn schedule_from_settings(db: &Db) -> Schedule {
 
 /// One tick: scan every root, then hash within budget. Returns a one-line summary.
 pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String> {
+    let _slot = crate::jobs::heavy();
     let scans = pipeline::scan_all(adapter, db)?;
     let mut files = 0;
     let mut changed = 0;

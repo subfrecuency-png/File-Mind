@@ -75,6 +75,11 @@ pub fn run(
             Err(RecvTimeoutError::Disconnected) => break,
         }
 
+        // Changes wait in the debouncer while a scan/classify/analyze job
+        // owns the database, rather than racing it into a lock timeout.
+        let Some(_slot) = crate::jobs::try_heavy() else {
+            continue;
+        };
         let ready = debouncer.ready();
         if !ready.is_empty() {
             match incremental::apply_changes(adapter, db, &ready) {
