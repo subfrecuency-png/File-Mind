@@ -28,6 +28,8 @@ use std::path::Path;
 /// Files above this are not rewritten in memory (the payload is built whole).
 pub const MAX_BYTES: u64 = 1 << 30;
 pub const METHOD: &str = "apfs";
+/// APFS allocation block; on-disk savings only come in whole blocks.
+pub const BLOCK: u64 = 4096;
 
 fn err(msg: impl Into<String>) -> CoreError {
     CoreError::Other(anyhow::anyhow!("{}", msg.into()))
@@ -84,7 +86,7 @@ mod sys {
         Ok((st.st_flags, md.len()))
     }
 
-    fn has_xattr(path: &Path, name: &str) -> Result<bool> {
+    pub(super) fn has_xattr(path: &Path, name: &str) -> Result<bool> {
         let c = cpath(path)?;
         let n = CString::new(name).map_err(|_| err("bad xattr name"))?;
         let r = unsafe {
@@ -223,29 +225,17 @@ mod sys {
             return Err(err(format!("{}: payload does not decode", path.display())));
         }
         drop(back);
-        if enc.len() as u64 + 512 >= before {
+        // the payload lands in whole allocation blocks too, so compare block
+        // counts and insist on at least one block saved
+        let after_blocks = (enc.len() as u64).div_ceil(BLOCK) * BLOCK;
+        if after_blocks + BLOCK > before {
             // not worth it: leave the file exactly as it is
             return Ok(RewriteReceipt {
                 on_disk_before: before,
                 on_disk_after: before,
             });
         }
-        if let Some(r) = &enc.rsrc {
-            set_xattr(path, decmpfs::RSRC_NAME, r)?;
-        }
-        if let Err(e) = set_xattr(path, decmpfs::XATTR_NAME, &enc.decmpfs) {
-            remove_xattr(path, decmpfs::RSRC_NAME);
-            return Err(e);
-        }
-        // the point of no return: from here the payload is authoritative
-        let fd = std::fs::OpenOptions::new().write(true).open(path)?;
-        if let Err(e) = fd.set_len(0) {
-            remove_xattr(path, decmpfs::XATTR_NAME);
-            remove_xattr(path, decmpfs::RSRC_NAME);
-            return Err(e.into());
-        }
-        fd.sync_all()?;
-        drop(fd);
+        write_payload(path, &enc)?;
         chflags(path, f | libc::UF_COMPRESSED)?;
         // the kernel must now serve the original bytes
         let (f2, len2) = flags(path)?;
@@ -261,12 +251,52 @@ mod sys {
         })
     }
 
+    /// Steps 1 and 2 of activation: xattrs in, data fork emptied, flag not
+    /// yet set. A crash after this leaves the `HalfDone` shape that
+    /// `compress` and `restore` both know how to finish.
+    fn write_payload(path: &Path, enc: &decmpfs::Encoded) -> Result<()> {
+        if let Some(r) = &enc.rsrc {
+            set_xattr(path, decmpfs::RSRC_NAME, r)?;
+        }
+        if let Err(e) = set_xattr(path, decmpfs::XATTR_NAME, &enc.decmpfs) {
+            remove_xattr(path, decmpfs::RSRC_NAME);
+            return Err(e);
+        }
+        // the point of no return: from here the payload is authoritative
+        let fd = std::fs::OpenOptions::new().write(true).open(path)?;
+        if let Err(e) = fd.set_len(0) {
+            remove_xattr(path, decmpfs::XATTR_NAME);
+            remove_xattr(path, decmpfs::RSRC_NAME);
+            return Err(e.into());
+        }
+        fd.sync_all()?;
+        Ok(())
+    }
+
+    /// Leave `path` in the crash-between-steps shape (payload written, flag
+    /// not set) so the tests can exercise recovery without faking it with
+    /// `chflags(0)`, which the kernel treats differently from a file that
+    /// was never activated.
+    #[cfg(test)]
+    pub fn leave_half_done(path: &Path) -> Result<()> {
+        let data = std::fs::read(path)?;
+        write_payload(path, &decmpfs::encode(&data))
+    }
+
     pub fn restore(path: &Path) -> Result<()> {
-        let (f, len) = flags(path)?;
+        let (mut f, mut len) = flags(path)?;
         if f & libc::UF_COMPRESSED == 0 {
             if len == 0 && has_xattr(path, decmpfs::XATTR_NAME)? {
-                // HalfDone: activate first so the kernel can materialise it
+                // HalfDone: activate first so the kernel can materialise it,
+                // then look again — the size is only known once it is live
                 chflags(path, f | libc::UF_COMPRESSED)?;
+                (f, len) = flags(path)?;
+                if f & libc::UF_COMPRESSED == 0 {
+                    return Err(err(format!(
+                        "{}: could not activate the half-written payload",
+                        path.display()
+                    )));
+                }
             } else {
                 return Ok(()); // nothing of ours on it
             }
@@ -386,26 +416,34 @@ mod mac_tests {
         let p = dir.path().join("notes.md");
         let data = b"# notes\n\nsome markdown that repeats\n".repeat(5_000);
         std::fs::write(&p, &data).unwrap();
-        compress(&p).unwrap();
-        // clearing the flag by hand leaves exactly the crash-between-steps shape:
-        // empty data fork, payload in the xattrs, no flag
-        let c = std::ffi::CString::new(p.to_string_lossy().as_bytes()).unwrap();
-        assert_eq!(unsafe { libc::chflags(c.as_ptr(), 0) }, 0);
+        let ino = std::fs::metadata(&p).unwrap().ino();
+        // a crash between "payload written" and "flag set": empty data
+        // fork, payload in the xattrs, no flag
+        sys::leave_half_done(&p).unwrap();
         assert_eq!(state(&p).unwrap(), RewriteState::HalfDone);
         assert_eq!(
             std::fs::metadata(&p).unwrap().len(),
             0,
             "the kernel shows nothing"
         );
+        // finishing forwards
         let r = compress(&p).unwrap();
         assert_eq!(state(&p).unwrap(), RewriteState::Rewritten);
         assert_eq!(std::fs::read(&p).unwrap(), data);
         assert!(r.on_disk_after <= r.on_disk_before);
-        // and restore from HalfDone works too
-        assert_eq!(unsafe { libc::chflags(c.as_ptr(), 0) }, 0);
+        assert_eq!(std::fs::metadata(&p).unwrap().ino(), ino);
         restore(&p).unwrap();
-        assert_eq!(state(&p).unwrap(), RewriteState::Original);
         assert_eq!(std::fs::read(&p).unwrap(), data);
+
+        // and rolling back from the same shape
+        let q = dir.path().join("notes2.md");
+        std::fs::write(&q, &data).unwrap();
+        sys::leave_half_done(&q).unwrap();
+        assert_eq!(state(&q).unwrap(), RewriteState::HalfDone);
+        restore(&q).unwrap();
+        assert_eq!(state(&q).unwrap(), RewriteState::Original);
+        assert_eq!(std::fs::read(&q).unwrap(), data);
+        assert!(!sys::has_xattr(&q, decmpfs::XATTR_NAME).unwrap());
     }
 
     #[test]
