@@ -5,7 +5,7 @@
   "identifier": "ai.filemind.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:14210",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
