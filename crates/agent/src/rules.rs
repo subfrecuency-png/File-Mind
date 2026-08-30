@@ -55,6 +55,13 @@ fn in_downloads(p: &Path) -> bool {
     p.to_string_lossy().to_lowercase().contains("/downloads/")
 }
 
+/// Dot-files are never a rule's business.
+fn is_hidden(p: &Path) -> bool {
+    p.file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(true)
+}
+
 /// The part of `p` under its (last) `Downloads` folder: `~/Downloads/a/b.pdf` → `a/b.pdf`.
 fn below_downloads(p: &Path) -> Option<PathBuf> {
     let comps: Vec<_> = p.components().collect();
@@ -114,12 +121,18 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, rule: &Rule) -> Result<(Manifest, 
             let archive = home.join("FileMind Archive").join("Downloads");
             for root in &roots {
                 for (path, mtime, size) in db.stale_downloads(root, cut)? {
-                    // loose files and shallow folders only; deep trees are
-                    // projects, and a project is never archived by a rule
+                    // Loose files directly in Downloads only. A subfolder is
+                    // somebody's project or download bundle: moving part of it
+                    // would tear it apart, so folders stay a person's call
+                    // (Assist mode). Hidden files (.DS_Store, .localized) are
+                    // never candidates.
                     let Some(rel) = below_downloads(&path) else {
                         continue;
                     };
-                    if rel.components().count() > 2 || filemind_core::scanner::in_noise_dir(&path) {
+                    if rel.components().count() != 1
+                        || is_hidden(&path)
+                        || filemind_core::scanner::in_noise_dir(&path)
+                    {
                         continue;
                     }
                     let _ = root;
@@ -152,6 +165,9 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, rule: &Rule) -> Result<(Manifest, 
                     continue;
                 }
                 let (canonical, _) = chain.members.last().unwrap().clone();
+                if chain.members.iter().any(|(p, _)| is_hidden(p)) {
+                    continue;
+                }
                 if filemind_core::scanner::in_noise_dir(&canonical)
                     || !roots.iter().any(|r| canonical.starts_with(r))
                 {
@@ -204,7 +220,7 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, rule: &Rule) -> Result<(Manifest, 
         RuleKind::TrashExactDuplicates(p) => {
             let cut = now - i64::from(p.older_than_days) * 86_400;
             for d in db.dup_copies(p.min_bytes)? {
-                if d.copy_mtime >= cut {
+                if d.copy_mtime >= cut || is_hidden(&d.copy) || is_hidden(&d.keeper) {
                     continue;
                 }
                 if p.keeper_must_be_outside_downloads && in_downloads(&d.keeper) {

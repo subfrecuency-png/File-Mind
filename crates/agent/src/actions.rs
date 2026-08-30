@@ -115,7 +115,11 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
                 // only loose files and shallow folders go to the archive; deep project
                 // trees are left alone (a project-level archive is a separate suggestion)
                 let rel = p.strip_prefix(&root).unwrap_or(&p);
-                if rel.components().count() > 2 {
+                if rel.components().count() > 2
+                    || p.file_name()
+                        .map(|n| n.to_string_lossy().starts_with('.'))
+                        .unwrap_or(true)
+                {
                     continue;
                 }
                 let month = Utc

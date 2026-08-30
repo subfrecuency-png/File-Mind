@@ -41,6 +41,15 @@ fn setup() -> (tempfile::TempDir, PathBuf, Db) {
     std::fs::write(root.join("Downloads/old-installer.dmg"), vec![7u8; 300_000]).unwrap();
     old(&root.join("Downloads/old-installer.dmg"), 200);
     std::fs::write(root.join("Downloads/fresh.zip"), vec![9u8; 300_000]).unwrap();
+    std::fs::write(root.join("Downloads/.DS_Store"), vec![1u8; 6_000]).unwrap();
+    old(&root.join("Downloads/.DS_Store"), 300);
+    std::fs::create_dir_all(root.join("Downloads/bundle")).unwrap();
+    std::fs::write(
+        root.join("Downloads/bundle/readme.txt"),
+        b"part of a bundle",
+    )
+    .unwrap();
+    old(&root.join("Downloads/bundle/readme.txt"), 300);
     std::fs::write(
         root.join("Downloads/some project/src/main.rs"),
         b"fn main(){}",
@@ -110,6 +119,14 @@ fn preview_then_arm_then_run_then_undo() {
     assert!(
         !m2.diff().contains("main.rs"),
         "deep project trees are never archived"
+    );
+    assert!(
+        !m2.diff().contains(".DS_Store"),
+        "hidden files are never candidates"
+    );
+    assert!(
+        !m2.diff().contains("bundle/readme.txt"),
+        "files inside a subfolder are left to Assist mode"
     );
     assert!(root.join("Downloads/offer sheet.pdf").exists());
 
