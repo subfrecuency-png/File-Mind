@@ -36,3 +36,26 @@ jobs:
       - run: |
           if grep -rnE 'fs::(remove_file|remove_dir|remove_dir_all)\b' crates/core/src crates/agent/src crates/cli/src | grep -v 'filemind:own-file'; then
             echo "::error::Hard delete found outside the OS adapter layer"; exit 1; fi
+
+  desktop:
+    name: desktop app (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: apps/desktop/src-tauri

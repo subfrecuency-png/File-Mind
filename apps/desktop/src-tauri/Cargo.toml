@@ -1,0 +1,33 @@
+[package]
+name = "filemind-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+description = "FileMind desktop app"
+
+# Its own workspace: the Tauri toolchain (webkit on Linux, WebView2 on
+# Windows) stays out of the core crates' build and CI matrix.
+[workspace]
+
+[lib]
+name = "filemind_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+filemind-core = { path = "../../../crates/core" }
+filemind-storage = { path = "../../../crates/storage" }
+filemind-agent = { path = "../../../crates/agent" }
+filemind-ai = { path = "../../../crates/ai" }
+directories = "5"
+
+[target.'cfg(unix)'.dependencies]
+filemind-adapter-macos = { path = "../../../crates/adapter-macos" }

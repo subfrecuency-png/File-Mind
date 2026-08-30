@@ -10,3 +10,5 @@
 /research/**/__pycache__
 /research/data/
 /_to_delete/
+/apps/desktop/src-tauri/target
+/apps/desktop/src-tauri/gen

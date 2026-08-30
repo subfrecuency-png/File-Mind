@@ -9,6 +9,9 @@ members = [
     "crates/agent",
     "crates/cli",
 ]
+# The desktop app is its own workspace (apps/desktop/src-tauri) so the Tauri
+# toolchain stays out of the core build.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
