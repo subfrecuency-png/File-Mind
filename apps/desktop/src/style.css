@@ -153,6 +153,8 @@ pre.diff { font-family: var(--mono); font-size: 12px; background: var(--panel-2)
 pre.diff .keep { color: var(--ok); font-weight: 600; }
 pre.diff .trash { color: var(--danger); }
 pre.diff .move { color: var(--accent); }
+pre.diff .shrink { color: var(--accent); }
+pre.diff .shrink-detail { color: var(--muted); }
 .problem { background: var(--danger-soft); color: var(--danger); padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
 
 /* ---- modal / toast / misc ---- */

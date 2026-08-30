@@ -2,11 +2,13 @@
 
 use crate::Db;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// One present file with everything the estimator needs.
 #[derive(Debug, Clone)]
 pub struct ShrinkRow {
+    pub root_id: i64,
     pub path: PathBuf,
     pub ext: Option<String>,
     pub size: u64,
@@ -15,6 +17,8 @@ pub struct ShrinkRow {
     pub category: String,
     /// The largest *cold* folder-backed project this file belongs to.
     pub cold_project: Option<i64>,
+    /// In-place rewrite the file already carries (`apfs`), if any.
+    pub rewrite: Option<String>,
 }
 
 /// A cold, folder-backed project. `folder` is the project directory (the
@@ -29,6 +33,35 @@ pub struct ColdProject {
 
 /// Key of the cached estimate in `settings`.
 pub const ESTIMATE_KEY: &str = "shrink.estimate";
+/// Files per `compress_cold_text` suggestion (largest first).
+pub const COMPRESS_MAX_FILES: usize = 500;
+/// A compress suggestion needs at least this much to reclaim.
+pub const COMPRESS_MIN_SAVING: u64 = 1 << 20;
+/// Buckets whose measured ratio is above this are not proposed.
+pub const COMPRESS_MAX_RATIO: f64 = 0.9;
+
+/// One proposed batch of tier-1 rewrites.
+#[derive(Debug, Clone)]
+pub struct CompressBatch {
+    pub root_id: i64,
+    pub root: PathBuf,
+    pub bucket: String,
+    pub ratio: f64,
+    /// (path, size) of the files in this batch, largest first.
+    pub files: Vec<(PathBuf, u64)>,
+    /// Every qualifying file in the bucket, not just this batch.
+    pub total_files: u64,
+    pub total_bytes: u64,
+}
+
+impl CompressBatch {
+    pub fn bytes(&self) -> u64 {
+        self.files.iter().map(|f| f.1).sum()
+    }
+    pub fn saving(&self) -> u64 {
+        ((self.bytes() as f64) * (1.0 - self.ratio)).round() as u64
+    }
+}
 
 impl Db {
     /// Every present file, user classifications winning, with its cold
@@ -36,7 +69,7 @@ impl Db {
     /// Streams through `f` so 200k rows never sit in memory at once.
     pub fn shrink_rows(&self, mut f: impl FnMut(ShrinkRow)) -> Result<u64> {
         let mut st = self.conn.prepare(
-            "SELECT f.path, f.ext, f.size, f.mtime, f.sensitive,
+            "SELECT f.path, f.ext, f.size, f.mtime, f.sensitive, f.rewrite, f.root_id,
                     COALESCE(
                       (SELECT category FROM classifications WHERE file_id = f.file_id AND source = 'user'),
                       (SELECT category FROM classifications WHERE file_id = f.file_id AND source <> 'user' ORDER BY ts DESC LIMIT 1),
@@ -59,8 +92,10 @@ impl Db {
                 size: size.max(0) as u64,
                 mtime: r.get(3)?,
                 sensitive: sensitive != 0,
-                category: r.get(5)?,
-                cold_project: r.get(6)?,
+                rewrite: r.get(5)?,
+                root_id: r.get(6)?,
+                category: r.get(7)?,
+                cold_project: r.get(8)?,
             });
             n += 1;
         }
@@ -83,6 +118,77 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Tier-1 candidates grouped per (root, bucket), using the ratios of the
+    /// cached estimate — no estimate, no proposals ("measure first").
+    pub fn compress_batches(&self, now: i64) -> Result<Vec<CompressBatch>> {
+        use filemind_core::shrink::estimate::{bucket_for, FileIn};
+        let Some(est) = self.shrink_estimate()? else {
+            return Ok(Vec::new());
+        };
+        let mut ratios: HashMap<String, f64> = HashMap::new();
+        if let Some(tiers) = est["tiers"].as_array() {
+            for t in tiers.iter().filter(|t| t["kind"] == "apfs") {
+                for b in t["buckets"].as_array().into_iter().flatten() {
+                    if let (Some(name), Some(r)) = (b["name"].as_str(), b["ratio"].as_f64()) {
+                        if r <= COMPRESS_MAX_RATIO {
+                            ratios.insert(name.to_string(), r);
+                        }
+                    }
+                }
+            }
+        }
+        if ratios.is_empty() {
+            return Ok(Vec::new());
+        }
+        let roots: HashMap<i64, PathBuf> = self
+            .list_roots()?
+            .into_iter()
+            .map(|r| (r.root_id, r.path))
+            .collect();
+        let mut groups: HashMap<(i64, String), Vec<(PathBuf, u64)>> = HashMap::new();
+        self.shrink_rows(|r| {
+            let f = FileIn {
+                path: &r.path,
+                ext: r.ext.as_deref(),
+                size: r.size,
+                mtime: r.mtime,
+                sensitive: r.sensitive,
+                category: &r.category,
+                cold_project: r.cold_project,
+                rewritten: r.rewrite.is_some(),
+            };
+            if let Some((1, bucket)) = bucket_for(&f, now) {
+                if ratios.contains_key(&bucket) {
+                    groups
+                        .entry((r.root_id, bucket))
+                        .or_default()
+                        .push((r.path.clone(), r.size));
+                }
+            }
+        })?;
+        let mut out = Vec::new();
+        for ((root_id, bucket), mut files) in groups {
+            files.sort_by_key(|f| std::cmp::Reverse(f.1));
+            let total_files = files.len() as u64;
+            let total_bytes = files.iter().map(|f| f.1).sum();
+            files.truncate(COMPRESS_MAX_FILES);
+            let b = CompressBatch {
+                root_id,
+                root: roots.get(&root_id).cloned().unwrap_or_default(),
+                ratio: ratios[&bucket],
+                bucket,
+                files,
+                total_files,
+                total_bytes,
+            };
+            if b.saving() >= COMPRESS_MIN_SAVING {
+                out.push(b);
+            }
+        }
+        out.sort_by_key(|b| std::cmp::Reverse(b.saving()));
+        Ok(out)
     }
 
     /// The cached estimate, if one was computed.

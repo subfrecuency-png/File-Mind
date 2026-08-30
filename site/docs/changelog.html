@@ -12,7 +12,8 @@
 <div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="active">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
 <h1>Changelog</h1>
 <h2>Unreleased</h2>
-<ul><li>Shrink estimate: <code>filemind shrink estimate</code> and the Overview “Shrinkable” tile measure, by sampling and compressing a few KB per file, what APFS compression, lossless JPEG XL/PNG and cold-project archives could reclaim. Nothing is rewritten yet.</li></ul>
+<ul><li>Shrink estimate: <code>filemind shrink estimate</code> and the Overview “Shrinkable” tile measure, by sampling and compressing a few KB per file, what APFS compression, lossless JPEG XL/PNG and cold-project archives could reclaim. </li>
+<li>Shrink tier 1: <em>Shrink</em> suggestions compress cold text, code and raw-format files in place with APFS transparent compression — a journaled <code>Rewrite</code> step that is read back and hash-checked before it counts, survives a crash at any point, and undoes in place. <code>filemind shrink info &lt;path&gt;</code> shows a file's on-disk state.</li></ul>
 <h2>0.2.0 — beta 1</h2>
 <ul><li>Signed, notarized macOS app with the agent and CLI bundled; Start at login; in-app updates.</li>
 <li>Automate mode with the seven-day preview, three tier-0 rule kinds, pause on conflict.</li>

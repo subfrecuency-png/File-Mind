@@ -135,6 +135,17 @@ impl Db {
                         [prefix],
                     )?;
                 }
+                Step::Rewrite { path, method, .. } => {
+                    tx.execute(
+                        "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
+                         SELECT file_id, ?2, 'rewritten', path, NULL, 'txn' FROM files WHERE path = ?1 AND status = 'present'",
+                        params![path.to_string_lossy(), now],
+                    )?;
+                    tx.execute(
+                        "UPDATE files SET rewrite = ?2 WHERE path = ?1 AND status = 'present'",
+                        params![path.to_string_lossy(), method],
+                    )?;
+                }
                 Step::Move { from, to, .. } => {
                     tx.execute(
                         "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
@@ -198,7 +209,7 @@ impl Journal for Db {
             for (i, s) in m.steps.iter().enumerate() {
                 let (from, to) = match s {
                     Step::Move { from, to, .. } => (from.to_string_lossy().to_string(), Some(to.to_string_lossy().to_string())),
-                    Step::Trash { path, .. } => (path.to_string_lossy().to_string(), None),
+                    Step::Trash { path, .. } | Step::Rewrite { path, .. } => (path.to_string_lossy().to_string(), None),
                 };
                 ins.execute(params![m.txn_id, i as i64, from, to, s.hash_before()])?;
             }
@@ -244,6 +255,17 @@ impl Journal for Db {
 
     fn load(&self, txn_id: &str) -> CoreResult<Option<(Manifest, TxnState, Vec<StepState>)>> {
         self.load_txn(txn_id).map_err(core_err)
+    }
+
+    fn update_manifest(&self, m: &Manifest) -> CoreResult<()> {
+        self.durable(|| {
+            self.conn.execute(
+                "UPDATE transactions SET manifest = ?2 WHERE txn_id = ?1",
+                params![m.txn_id, serde_json::to_string(m)?],
+            )?;
+            Ok(())
+        })
+        .map_err(core_err)
     }
 
     fn unfinished(&self) -> CoreResult<Vec<String>> {

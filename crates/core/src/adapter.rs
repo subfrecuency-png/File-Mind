@@ -61,6 +61,28 @@ pub struct TrashReceipt {
     pub at: DateTime<Utc>,
 }
 
+/// What an in-place rewrite (transparent compression) did to a file's
+/// on-disk footprint. The bytes an application reads never change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewriteReceipt {
+    pub on_disk_before: u64,
+    pub on_disk_after: u64,
+}
+
+/// Whether a file currently carries a rewrite, as seen on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteState {
+    /// Plain file; nothing of ours on it.
+    Original,
+    /// The rewrite is complete and the kernel serves the original bytes.
+    Rewritten,
+    /// A rewrite was interrupted between its last two steps (the compressed
+    /// payload is on the file but not yet activated). `rewrite` finishes it.
+    HalfDone,
+    /// This platform / volume has no such mechanism.
+    Unsupported,
+}
+
 /// Handle that stops the watcher when dropped.
 pub trait WatchHandle: Send {}
 
@@ -121,6 +143,40 @@ pub trait OsAdapter: Send + Sync {
 
     /// Default roots offered during onboarding (Desktop, Documents, Downloads, Pictures).
     fn default_roots(&self) -> Vec<PathBuf>;
+
+    /// Rewrite `path` in place with `method` (today: `"apfs"`, transparent
+    /// compression). Same inode, same bytes on read, smaller on disk; must
+    /// refuse links, files open by another process and anything already
+    /// rewritten; must be idempotent on a `HalfDone` file. Only the
+    /// transaction manager may call this.
+    fn rewrite(&self, path: &Path, method: &str) -> Result<RewriteReceipt> {
+        let _ = path;
+        Err(crate::CoreError::Other(anyhow::anyhow!(
+            "rewrite method {method} is not supported on {}",
+            self.platform()
+        )))
+    }
+
+    /// Undo [`OsAdapter::rewrite`]: put the plain representation back, in
+    /// place, same inode.
+    fn rewrite_restore(&self, path: &Path, method: &str) -> Result<()> {
+        let _ = path;
+        Err(crate::CoreError::Other(anyhow::anyhow!(
+            "rewrite method {method} is not supported on {}",
+            self.platform()
+        )))
+    }
+
+    /// What the disk says about `path` with respect to `method`.
+    fn rewrite_state(&self, path: &Path, method: &str) -> Result<RewriteState> {
+        let _ = (path, method);
+        Ok(RewriteState::Unsupported)
+    }
+
+    /// Bytes `path` occupies on disk (blocks, not length). Defaults to the length.
+    fn on_disk_bytes(&self, path: &Path) -> Result<u64> {
+        Ok(std::fs::symlink_metadata(path)?.len())
+    }
 }
 
 /// True if `path` is `root` or lies beneath it (lexically; callers canonicalise first).

@@ -22,6 +22,7 @@ pub fn run_estimate(db: &Db, mut progress: impl FnMut(u64, u64)) -> Result<Estim
             sensitive: r.sensitive,
             category: &r.category,
             cold_project: r.cold_project,
+            rewritten: r.rewrite.is_some(),
         })
     })?;
     let projects: Vec<ProjectIn> = db

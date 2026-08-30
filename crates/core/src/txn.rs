@@ -17,7 +17,7 @@
 //! The [`CrashPoint`] hook exists for the chaos test; production passes
 //! [`CrashPoint::Never`].
 
-use crate::adapter::OsAdapter;
+use crate::adapter::{OsAdapter, RewriteState};
 use crate::mode::{Mode, RiskTier};
 use crate::scanner::hash_file;
 use crate::{CoreError, Result};
@@ -115,20 +115,46 @@ pub enum Step {
         #[serde(default)]
         trashed_to: Option<PathBuf>,
     },
+    /// Rewrite a file's on-disk representation in place (Shrink): same path,
+    /// same inode, same bytes on read, fewer on disk. `method` names the
+    /// mechanism (`apfs`: transparent compression). Execution verifies that
+    /// the file decodes to `hash_before` and records that hash as
+    /// `hash_after_decoded`; undo puts the plain representation back.
+    /// `bytes_before`/`bytes_after` are on-disk sizes (the estimate at
+    /// planning time, the real figure once done).
+    Rewrite {
+        path: PathBuf,
+        method: String,
+        hash_before: Option<String>,
+        #[serde(default)]
+        hash_after_decoded: Option<String>,
+        #[serde(default)]
+        bytes_before: u64,
+        #[serde(default)]
+        bytes_after: Option<u64>,
+    },
 }
 
 impl Step {
     pub fn source(&self) -> &Path {
         match self {
             Step::Move { from, .. } => from,
-            Step::Trash { path, .. } => path,
+            Step::Trash { path, .. } | Step::Rewrite { path, .. } => path,
         }
     }
     pub fn hash_before(&self) -> Option<&str> {
         match self {
-            Step::Move { hash_before, .. } | Step::Trash { hash_before, .. } => {
-                hash_before.as_deref()
-            }
+            Step::Move { hash_before, .. }
+            | Step::Trash { hash_before, .. }
+            | Step::Rewrite { hash_before, .. } => hash_before.as_deref(),
+        }
+    }
+    /// Short verb for logs and previews.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Step::Move { .. } => "move",
+            Step::Trash { .. } => "trash",
+            Step::Rewrite { .. } => "rewrite",
         }
     }
 }
@@ -189,6 +215,19 @@ impl Manifest {
                     to.display()
                 ),
                 Step::Trash { path, .. } => format!("{i:>3}  TRASH  {}", path.display()),
+                Step::Rewrite {
+                    path,
+                    method,
+                    bytes_before,
+                    bytes_after,
+                    ..
+                } => format!(
+                    "{i:>3}  SHRINK {}\n       {method:<6} {} → {}{} on disk",
+                    path.display(),
+                    crate::health::human(*bytes_before),
+                    if bytes_after.is_some() { "" } else { "~" },
+                    crate::health::human(bytes_after.unwrap_or(0)),
+                ),
             };
             out.push_str(&line);
             out.push('\n');
@@ -213,6 +252,13 @@ pub trait Journal {
     fn load(&self, txn_id: &str) -> Result<Option<(Manifest, TxnState, Vec<StepState>)>>;
     /// Transactions left in `Planned` or `Running` by a previous process.
     fn unfinished(&self) -> Result<Vec<String>>;
+    /// Re-persist the manifest of a transaction that is already journaled
+    /// (a Rewrite step records its verified hash and real size). Step states
+    /// are untouched.
+    fn update_manifest(&self, m: &Manifest) -> Result<()> {
+        let _ = m;
+        Ok(())
+    }
 }
 
 /// Where to simulate a crash (chaos testing only).
@@ -289,7 +335,8 @@ pub fn validate_with(
                             Some(_) => {}
                             None => match s {
                                 Step::Move { hash_before, .. }
-                                | Step::Trash { hash_before, .. } => *hash_before = Some(h),
+                                | Step::Trash { hash_before, .. }
+                                | Step::Rewrite { hash_before, .. } => *hash_before = Some(h),
                             },
                         },
                         Err(e) => {
@@ -328,6 +375,34 @@ pub fn validate_with(
                 ));
             }
             seen_targets.push(to.clone());
+        }
+        if let Step::Rewrite {
+            path,
+            method,
+            bytes_before,
+            ..
+        } = s
+        {
+            match adapter.rewrite_state(path, method)? {
+                RewriteState::Original => {}
+                RewriteState::Rewritten => problems.push(format!(
+                    "step {i}: {} is already rewritten ({method})",
+                    path.display()
+                )),
+                RewriteState::HalfDone => problems.push(format!(
+                    "step {i}: {} has an unfinished rewrite; recover first",
+                    path.display()
+                )),
+                RewriteState::Unsupported => problems.push(format!(
+                    "step {i}: {method} is not available for {}",
+                    path.display()
+                )),
+            }
+            if *bytes_before == 0 {
+                if let Ok(b) = adapter.on_disk_bytes(path) {
+                    *bytes_before = b;
+                }
+            }
         }
     }
     Ok(problems)
@@ -382,6 +457,42 @@ fn do_step(adapter: &dyn OsAdapter, s: &Step) -> Result<Option<PathBuf>> {
             let receipt = adapter.move_to_trash_at(path, &target)?;
             Ok(receipt.trashed_to)
         }
+        Step::Rewrite { path, method, .. } => {
+            adapter.rewrite(path, method)?;
+            Ok(None)
+        }
+    }
+}
+
+/// After a rewrite: the file must still decode to exactly what it was.
+/// Anything else is undone on the spot and reported as a failure.
+fn verify_rewrite(adapter: &dyn OsAdapter, s: &mut Step) -> Result<()> {
+    let Step::Rewrite {
+        path,
+        method,
+        hash_before,
+        hash_after_decoded,
+        bytes_after,
+        ..
+    } = s
+    else {
+        return Ok(());
+    };
+    let now = hash_file(path)?;
+    match hash_before.as_deref() {
+        Some(h) if h == now => {
+            *hash_after_decoded = Some(now);
+            *bytes_after = adapter.on_disk_bytes(path).ok();
+            Ok(())
+        }
+        _ => {
+            tracing::error!(path = %path.display(), "rewrite did not round-trip; restoring");
+            adapter.rewrite_restore(path, method)?;
+            Err(CoreError::Other(anyhow::anyhow!(
+                "{} did not decode to its original contents after {method}; restored",
+                path.display()
+            )))
+        }
     }
 }
 
@@ -409,13 +520,17 @@ pub fn execute(
                 *trashed_to = Some(t.clone());
                 Some(t)
             }
-            Step::Move { .. } => None,
+            Step::Move { .. } | Step::Rewrite { .. } => None,
         };
         journal.set_step_state(&m.txn_id, i, StepState::Running, planned_target.as_deref())?;
         if crash == CrashPoint::BeforeOp(i) {
             return Err(CoreError::Other(SimulatedCrash.into()));
         }
-        match do_step(adapter, &m.steps[i]) {
+        let outcome = do_step(adapter, &m.steps[i]).and_then(|t| {
+            verify_rewrite(adapter, &mut m.steps[i])?;
+            Ok(t)
+        });
+        match outcome {
             Ok(trashed_to) => {
                 if let Step::Trash {
                     trashed_to: slot, ..
@@ -425,6 +540,9 @@ pub fn execute(
                 }
                 if crash == CrashPoint::AfterOp(i) {
                     return Err(CoreError::Other(SimulatedCrash.into()));
+                }
+                if matches!(m.steps[i], Step::Rewrite { .. }) {
+                    journal.update_manifest(m)?;
                 }
                 journal.set_step_state(&m.txn_id, i, StepState::Done, trashed_to.as_deref())?;
                 rep.done += 1;
@@ -484,7 +602,65 @@ pub fn recover(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> 
                     (None, false) => StepState::Conflict, // left, but not where we said
                 }
             }
+            Step::Rewrite {
+                path,
+                method,
+                hash_before,
+                ..
+            } => {
+                // The file never moves; the disk says whether the rewrite
+                // finished. In every case the contents must still hash to
+                // what they were, or nobody touches the file again.
+                let same = |p: &Path| match (hash_before, hash_file(p)) {
+                    (Some(h), Ok(now)) => *h == now,
+                    (None, Ok(_)) => true,
+                    _ => false,
+                };
+                match adapter.stat(path)? {
+                    None => StepState::Conflict,
+                    Some(_) => match adapter.rewrite_state(path, method)? {
+                        RewriteState::Original | RewriteState::Unsupported => {
+                            if same(path) {
+                                StepState::Planned
+                            } else {
+                                StepState::Conflict
+                            }
+                        }
+                        RewriteState::Rewritten => {
+                            if same(path) {
+                                StepState::Done
+                            } else {
+                                StepState::Conflict
+                            }
+                        }
+                        RewriteState::HalfDone => {
+                            // payload written, not yet activated: finish, then check
+                            match adapter.rewrite(path, method) {
+                                Ok(_) if same(path) => StepState::Done,
+                                _ => StepState::Conflict,
+                            }
+                        }
+                    },
+                }
+            }
         };
+        if settled == StepState::Done {
+            if let Step::Rewrite { .. } = &m.steps[i] {
+                let mut m2 = m.clone();
+                if let Step::Rewrite {
+                    hash_after_decoded,
+                    hash_before,
+                    bytes_after,
+                    path,
+                    ..
+                } = &mut m2.steps[i]
+                {
+                    *hash_after_decoded = hash_before.clone();
+                    *bytes_after = adapter.on_disk_bytes(path).ok();
+                }
+                journal.update_manifest(&m2)?;
+            }
+        }
         journal.set_step_state(txn_id, i, settled, None)?;
         match settled {
             StepState::Done => rep.done += 1,
@@ -530,6 +706,64 @@ pub fn undo(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> Res
         if steps[i] != StepState::Done {
             continue;
         }
+        if let Step::Rewrite {
+            path,
+            method,
+            hash_before,
+            ..
+        } = &m.steps[i]
+        {
+            // In place: check the contents are still what we compressed, then
+            // put the plain representation back. Nothing moves, nothing can
+            // be occupied.
+            if adapter.stat(path)?.is_none() {
+                rep.skipped
+                    .push(format!("step {i}: {} is no longer there", path.display()));
+                continue;
+            }
+            match adapter.rewrite_state(path, method)? {
+                RewriteState::Rewritten | RewriteState::HalfDone => {}
+                RewriteState::Original => {
+                    // the OS already undid it (any write to a compressed file
+                    // decompresses it) — nothing to restore
+                    journal.set_step_state(txn_id, i, StepState::Undone, None)?;
+                    rep.restored += 1;
+                    continue;
+                }
+                RewriteState::Unsupported => {
+                    rep.skipped.push(format!(
+                        "step {i}: {method} is not available here; {} left as is",
+                        path.display()
+                    ));
+                    continue;
+                }
+            }
+            if let Some(h) = hash_before {
+                match hash_file(path) {
+                    Ok(now) if now != *h => {
+                        rep.skipped.push(format!(
+                            "step {i}: {} was modified after the rewrite; left in place",
+                            path.display()
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        rep.skipped
+                            .push(format!("step {i}: cannot read {}: {e}", path.display()));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            match adapter.rewrite_restore(path, method) {
+                Ok(()) => {
+                    journal.set_step_state(txn_id, i, StepState::Undone, None)?;
+                    rep.restored += 1;
+                }
+                Err(e) => rep.skipped.push(format!("step {i}: {e}")),
+            }
+            continue;
+        }
         let (current, original, hash) = match &m.steps[i] {
             Step::Move {
                 from,
@@ -550,6 +784,7 @@ pub fn undo(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> Res
                     continue;
                 }
             },
+            Step::Rewrite { .. } => unreachable!("handled above"),
         };
         if adapter.stat(&current)?.is_none() {
             rep.skipped.push(format!(

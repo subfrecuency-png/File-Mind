@@ -17,11 +17,12 @@
 <tr><td>Duplicate</td><td>Trash exact copies; keep the one in the most deliberate place with the cleanest name.</td><td>2</td></tr>
 <tr><td>Duplicate folder</td><td>A whole folder that is a byte-for-byte copy of another (<code>creditos-v1</code> of <code>creditos</code>), trashed as one step.</td><td>2</td></tr>
 <tr><td>Versions</td><td>Tuck <code>report_v1…v5</code> into a <em>report versions</em> folder beside the newest.</td><td>1</td></tr>
-<tr><td>Stale downloads</td><td>Move loose files untouched for 90+ days into <code>~/FileMind Archive/Downloads/&lt;year&gt;/&lt;month&gt;/</code>.</td><td>1</td></tr></table>
+<tr><td>Stale downloads</td><td>Move loose files untouched for 90+ days into <code>~/FileMind Archive/Downloads/&lt;year&gt;/&lt;month&gt;/</code>.</td><td>1</td></tr>
+<tr><td>Shrink</td><td>Rewrite cold text, code and raw-format files in place with APFS transparent compression: same file, same contents to every app, fewer bytes on disk. Proposed only after <code>filemind shrink estimate</code> (or the Overview tile) has measured the ratio, in batches of up to 500 files. Never sensitive files, app bundles, <code>Library</code>, or files another program has open.</td><td>1</td></tr></table>
 <h2>Preview → apply</h2>
-<p>The preview lists every KEEP, MOVE and TRASH line with the exact paths, plus any problems (a file that changed since analysis, a destination that already exists). Apply runs the plan you saw — the transaction carries the previewed id and a fingerprint of its steps, so a plan that changed underneath you is refused rather than run.</p>
+<p>The preview lists every KEEP, MOVE, TRASH and SHRINK line with the exact paths, plus any problems (a file that changed since analysis, a destination that already exists). Apply runs the plan you saw — the transaction carries the previewed id and a fingerprint of its steps, so a plan that changed underneath you is refused rather than run.</p>
 <h2>Undo</h2>
-<p>History lists every transaction. Undo restores each step from the journal; a file edited after it was moved, or a destination that is now occupied, is left alone and reported rather than clobbered. For transactions that only trashed things the button reads <strong>Put back</strong>.</p>
+<p>History lists every transaction. Undo restores each step from the journal; a file edited after it was moved, or a destination that is now occupied, is left alone and reported rather than clobbered. For transactions that only trashed things the button reads <strong>Put back</strong>. A Shrink step is undone in place: the plain copy is written back and the file keeps its identity; if the file was edited after it was compressed (macOS decompresses it on the first write anyway), it is left as is.</p>
 </article></div>
 <footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
 </div></body></html>

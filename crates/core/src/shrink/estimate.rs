@@ -194,6 +194,8 @@ pub struct FileIn<'a> {
     pub category: &'a str,
     /// The cold project this file belongs to, if any.
     pub cold_project: Option<i64>,
+    /// Already carries an in-place rewrite (tier 1 done): never a candidate again.
+    pub rewritten: bool,
 }
 
 /// A cold project, for the per-project breakdown of tier 3.
@@ -357,7 +359,7 @@ pub fn bucket_for(f: &FileIn, now: i64) -> Option<(u8, String)> {
 }
 
 fn key_for(f: &FileIn, now: i64) -> Option<BucketKey> {
-    if f.sensitive || f.size < MIN_FILE_BYTES || excluded_path(f.path) {
+    if f.sensitive || f.rewritten || f.size < MIN_FILE_BYTES || excluded_path(f.path) {
         return None;
     }
     if f.cold_project.is_some() {
@@ -746,6 +748,7 @@ mod tests {
             sensitive: false,
             category: cat,
             cold_project: None,
+            rewritten: false,
         }
     }
 
@@ -818,6 +821,9 @@ mod tests {
         let mut s = file(&p, "md", 10_000, 60, "document");
         s.sensitive = true;
         assert_eq!(bucket_for(&s, now), None);
+        let mut done = file(&p, "md", 10_000, 60, "document");
+        done.rewritten = true;
+        assert_eq!(bucket_for(&done, now), None);
         let n = PathBuf::from("/Users/r/code/node_modules/a/index.js");
         assert_eq!(bucket_for(&file(&n, "js", 10_000, 60, "code"), now), None);
         let l = PathBuf::from("/Users/r/Library/Caches/x.log");

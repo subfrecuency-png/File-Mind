@@ -5,6 +5,7 @@
 
 #![cfg(unix)]
 
+pub mod apfs;
 mod notify_bridge;
 pub mod spotlight;
 pub mod trash;
@@ -117,6 +118,35 @@ impl OsAdapter for MacAdapter {
             .map(|b| b.home_dir().to_path_buf())
             .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
         trash::move_to_trash_at(&home, path, target)
+    }
+
+    fn rewrite(&self, path: &Path, method: &str) -> Result<RewriteReceipt> {
+        if method != apfs::METHOD {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "unknown rewrite method {method}"
+            )));
+        }
+        apfs::compress(path)
+    }
+
+    fn rewrite_restore(&self, path: &Path, method: &str) -> Result<()> {
+        if method != apfs::METHOD {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "unknown rewrite method {method}"
+            )));
+        }
+        apfs::restore(path)
+    }
+
+    fn rewrite_state(&self, path: &Path, method: &str) -> Result<RewriteState> {
+        if method != apfs::METHOD {
+            return Ok(RewriteState::Unsupported);
+        }
+        apfs::state(path)
+    }
+
+    fn on_disk_bytes(&self, path: &Path) -> Result<u64> {
+        apfs::on_disk_bytes(path)
     }
 
     fn rename_no_clobber(&self, from: &Path, to: &Path) -> Result<()> {

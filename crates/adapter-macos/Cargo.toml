@@ -12,6 +12,10 @@ chrono.workspace = true
 walkdir.workspace = true
 directories.workspace = true
 notify.workspace = true
+flate2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -135,6 +135,21 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
                 });
             }
         }
+        "compress_cold_text" => {
+            let method = s.subject["method"].as_str().unwrap_or("apfs").to_string();
+            let ratio = s.subject["ratio"].as_f64().unwrap_or(1.0);
+            for p in paths(&s.subject["files"]) {
+                let size = std::fs::symlink_metadata(&p).map(|m| m.len()).unwrap_or(0);
+                m.steps.push(Step::Rewrite {
+                    path: p,
+                    method: method.clone(),
+                    hash_before: None,
+                    hash_after_decoded: None,
+                    bytes_before: size,
+                    bytes_after: Some(((size as f64) * ratio).round() as u64),
+                });
+            }
+        }
         other => bail!("cannot plan suggestion kind {other}"),
     }
     if m.steps.is_empty() {
@@ -155,6 +170,12 @@ fn fingerprint(m: &Manifest) -> String {
             }
             Step::Trash { path, .. } => {
                 h.update(b"T");
+                h.update(path.to_string_lossy().as_bytes());
+            }
+            Step::Rewrite { path, method, .. } => {
+                h.update(b"R");
+                h.update(method.as_bytes());
+                h.update(b"\0");
                 h.update(path.to_string_lossy().as_bytes());
             }
         }
@@ -300,6 +321,17 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
                     db.conn.execute(
                         "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
                          SELECT file_id, ?2, 'restored', NULL, path, 'txn' FROM files WHERE path = ?1",
+                        rusqlite::params![path.to_string_lossy(), now],
+                    )?;
+                }
+                Step::Rewrite { path, .. } => {
+                    db.conn.execute(
+                        "UPDATE files SET rewrite = NULL WHERE path = ?1",
+                        rusqlite::params![path.to_string_lossy()],
+                    )?;
+                    db.conn.execute(
+                        "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
+                         SELECT file_id, ?2, 'restored', path, NULL, 'txn' FROM files WHERE path = ?1",
                         rusqlite::params![path.to_string_lossy(), now],
                     )?;
                 }

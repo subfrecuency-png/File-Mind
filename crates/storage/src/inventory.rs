@@ -233,7 +233,9 @@ impl Db {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'present', ?12, ?12, ?13)",
             )?;
             let mut update = tx.prepare_cached(
-                "UPDATE files SET path = ?2, name = ?3, ext = ?4, size = ?5, mtime = ?6, ctime = ?7,
+                "UPDATE files SET path = ?2, name = ?3, ext = ?4,
+                                  rewrite = CASE WHEN size = ?5 AND mtime = ?6 THEN rewrite ELSE NULL END,
+                                  size = ?5, mtime = ?6, ctime = ?7,
                                   status = 'present', last_seen = ?8, root_id = ?9, last_scan_seq = ?10
                  WHERE file_id = ?1",
             )?;

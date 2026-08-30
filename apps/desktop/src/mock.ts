@@ -25,6 +25,9 @@ const suggestions: Record<string, unknown>[] = [
   { id: 2201, kind: "collapse_versions", risk_tier: 1, est_bytes: 0, state: "proposed",
     subject: { keep: `${HOME}/Documents/Pitch/creditos deck v7.key`, older: [`${HOME}/Documents/Pitch/creditos deck v5.key`, `${HOME}/Documents/Pitch/creditos deck v6.key`] },
     rationale: "3 versions of creditos deck — v7 is newest; tuck v5 and v6 into a 'creditos deck versions' folder beside it." },
+  { id: 4102, kind: "compress_cold_text", risk_tier: 1, est_bytes: 1_370_000_000, state: "proposed",
+    subject: { root: `${HOME}/Downloads`, bucket: "code", ratio: 0.28, method: "apfs", files: [`${HOME}/Downloads/creditos-v1/src/ledger.ts`, `${HOME}/Downloads/creditos-v1/src/api.ts`, `${HOME}/Downloads/creditos-v1/package-lock.json`], bytes: 1_900_000_000, total_files: 38_000, total_bytes: 1_900_000_000 },
+    rationale: "500 code files (412.0 MB) untouched for 30+ days in Downloads could take about 296.6 MB less space with APFS transparent compression. They stay exactly the same to every app; reversible in place. (37,500 more qualify; they come in the next batch.)" },
   { id: 3859, kind: "stale_downloads", risk_tier: 1, est_bytes: 34_000_000_000, state: "proposed",
     subject: { root: `${HOME}/Downloads`, older_than_days: 90 },
     rationale: "1,204 items in Downloads untouched for over 90 days (34.0 GB) — archive them into ~/FileMind Archive/Downloads by month." },
@@ -240,6 +243,8 @@ export async function mockRpc(method: string, p: Record<string, unknown>): Promi
       if (s.kind === "trash_duplicates") {
         diff += `     KEEP   ${sub.keep}\n`;
         (sub.trash as string[]).forEach((t, i) => { diff += `${String(i).padStart(3)}  TRASH  ${t}\n`; steps++; });
+      } else if (s.kind === "compress_cold_text") {
+        (sub.files as string[]).forEach((f, i) => { diff += `${String(i).padStart(3)}  SHRINK ${f}\n       apfs   ${[1.2, 0.8, 2.1][i] ?? 1} MB → ~${[340, 220, 590][i] ?? 300} KB on disk\n`; steps++; });
       } else if (s.kind === "collapse_versions") {
         diff += `     KEEP   ${sub.keep}\n`;
         (sub.older as string[]).forEach((t, i) => { diff += `${String(i).padStart(3)}  MOVE   ${t}\n       →      ${HOME}/Documents/Pitch/creditos deck versions/${t.split("/").pop()}\n`; steps++; });

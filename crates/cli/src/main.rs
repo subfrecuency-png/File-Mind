@@ -289,6 +289,8 @@ enum ShrinkCmd {
         #[arg(long, default_value_t = 10)]
         projects: usize,
     },
+    /// What one file looks like on disk: compressed or not, bytes used.
+    Info { path: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -1980,7 +1982,56 @@ fn run() -> Result<()> {
                     }
                 }
                 println!();
-                println!("Nothing was changed. Each tier becomes a normal, undoable transaction once it ships.");
+                println!("Nothing was changed. Tier 1 arrives as `compress_cold_text` suggestions after the next analyze (`filemind suggest`); tiers 2–3 are not built yet.");
+            }
+            ShrinkCmd::Info { path } => {
+                let path = path.canonicalize().unwrap_or(path);
+                let md = std::fs::symlink_metadata(&path)?;
+                let state = adapter.rewrite_state(&path, "apfs")?;
+                let on_disk = adapter.on_disk_bytes(&path)?;
+                println!("{}", path.display());
+                println!("  {:<10} {}", "size", human_bytes(md.len()));
+                println!(
+                    "  {:<10} {}{}",
+                    "on disk",
+                    human_bytes(on_disk),
+                    if md.len() > 0 {
+                        format!("  ({:.0} %)", on_disk as f64 * 100.0 / md.len() as f64)
+                    } else {
+                        String::new()
+                    }
+                );
+                println!(
+                    "  {:<10} {}",
+                    "apfs",
+                    match state {
+                        filemind_core::RewriteState::Original => "not compressed",
+                        filemind_core::RewriteState::Rewritten =>
+                            "compressed (transparent; reads are bit-identical)",
+                        filemind_core::RewriteState::HalfDone =>
+                            "UNFINISHED rewrite — run `filemind agent start` to recover",
+                        filemind_core::RewriteState::Unsupported =>
+                            "not available on this platform",
+                    }
+                );
+                let (_, db) = open_db()?;
+                let rw: Option<Option<String>> = db
+                    .conn
+                    .query_row(
+                        "SELECT rewrite FROM files WHERE path = ?1 AND status = 'present'",
+                        [path.to_string_lossy().to_string()],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                println!(
+                    "  {:<10} {}",
+                    "index",
+                    match rw {
+                        None => "not indexed".to_string(),
+                        Some(None) => "indexed, no rewrite recorded".to_string(),
+                        Some(Some(m)) => format!("indexed, rewritten with {m} by FileMind"),
+                    }
+                );
             }
         },
 

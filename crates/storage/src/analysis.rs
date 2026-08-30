@@ -447,6 +447,45 @@ impl Db {
                     n += 1;
                 }
             }
+            // Shrink tier 1: only where transparent compression exists (or
+            // when a test asks for it), and only after an estimate measured
+            // the ratios — "measure first, promise nothing".
+            if cfg!(target_os = "macos") || std::env::var_os("FILEMIND_SHRINK_ANYWHERE").is_some() {
+                for b in self.compress_batches(now)? {
+                    let files: Vec<String> = b
+                        .files
+                        .iter()
+                        .map(|(p, _)| p.to_string_lossy().to_string())
+                        .collect();
+                    up.execute(params![
+                        "compress_cold_text",
+                        format!("{}:{}", b.root_id, b.bucket),
+                        json!({
+                            "root": b.root, "bucket": b.bucket, "ratio": b.ratio, "method": "apfs",
+                            "files": files, "bytes": b.bytes(),
+                            "total_files": b.total_files, "total_bytes": b.total_bytes
+                        })
+                        .to_string(),
+                        format!(
+                            "{} {} files ({}) untouched for 30+ days{} could take about {} less space with APFS transparent compression. They stay exactly the same to every app; reversible in place.{}",
+                            b.files.len(),
+                            b.bucket,
+                            health::human(b.bytes()),
+                            b.root.file_name().map(|n| format!(" in {}", n.to_string_lossy())).unwrap_or_default(),
+                            health::human(b.saving()),
+                            if b.total_files > b.files.len() as u64 {
+                                format!(" ({} more qualify; they come in the next batch.)", b.total_files - b.files.len() as u64)
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        b.saving() as i64,
+                        1i64,
+                        now
+                    ])?;
+                    n += 1;
+                }
+            }
         }
         tx.commit()?;
         Ok(n)

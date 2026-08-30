@@ -695,6 +695,8 @@ dependencies = [
  "chrono",
  "directories",
  "filemind-core",
+ "flate2",
+ "libc",
  "notify",
  "tempfile",
  "tracing",

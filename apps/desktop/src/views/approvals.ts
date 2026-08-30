@@ -7,13 +7,13 @@ interface List { proposed: number; est_bytes: number; items: Suggestion[] }
 interface Plan { txn_id: string; steps: number; diff: string; problems: string[]; risk_tier: number; mode: string; fingerprint: string }
 interface Applied { txn_id: string; done: number; failed: number; state: string }
 
-const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", trash_duplicate_folder: "Duplicate folder", collapse_versions: "Versions", stale_downloads: "Stale downloads" };
+const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", trash_duplicate_folder: "Duplicate folder", collapse_versions: "Versions", stale_downloads: "Stale downloads", compress_cold_text: "Shrink" };
 
-/** Colour the plan's KEEP / TRASH / MOVE lines. */
+/** Colour the plan's KEEP / TRASH / MOVE / SHRINK lines. */
 export function renderDiff(diff: string): HTMLElement {
   const pre = h("pre", { class: "diff" });
   for (const line of diff.split("\n")) {
-    const cls = /^\s*KEEP/.test(line) ? "keep" : /^\s*\d+\s+TRASH/.test(line) ? "trash" : /^\s*\d+\s+MOVE|^\s*→/.test(line) ? "move" : "";
+    const cls = /^\s*KEEP/.test(line) ? "keep" : /^\s*\d+\s+TRASH/.test(line) ? "trash" : /^\s*\d+\s+MOVE|^\s*→/.test(line) ? "move" : /^\s*\d+\s+SHRINK/.test(line) ? "shrink" : /^\s+apfs\s/.test(line) ? "shrink-detail" : "";
     pre.append(h("span", { class: cls }, line.replace(/\/Users\/[^/]+/g, "~")), "\n");
   }
   return pre;
@@ -90,7 +90,9 @@ export async function approvalsView(main: HTMLElement, ctx: AppCtx) {
         h("div", { class: "row", style: { marginBottom: "10px" } }, pill(`${num(plan.steps)} step${plan.steps === 1 ? "" : "s"}`), pill(`risk tier ${plan.risk_tier}`, `tier${plan.risk_tier}`), s.est_bytes ? pill(`reclaims ${bytes(s.est_bytes)}`) : null, h("span", { class: "muted mono" }, plan.txn_id)),
         renderDiff(plan.diff),
         ...plan.problems.map((p) => h("div", { class: "problem" }, p)),
-        h("p", { class: "muted", style: { fontSize: "12px" } }, "Trashed files go to the Trash; moves never overwrite. The whole transaction is journaled first and can be undone from History, with every file's contents verified before it is put back."),
+        h("p", { class: "muted", style: { fontSize: "12px" } }, s.kind === "compress_cold_text"
+          ? "Shrink rewrites each file in place with APFS transparent compression: same file, same contents to every app, fewer bytes on disk. Each file is read back and checked against its hash before the step counts as done; undo from History puts the plain copy back in place."
+          : "Trashed files go to the Trash; moves never overwrite. The whole transaction is journaled first and can be undone from History, with every file's contents verified before it is put back."),
       );
       const actions = h(
         "div",
