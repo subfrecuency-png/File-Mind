@@ -291,8 +291,18 @@ fn search_parsed(
     } else {
         if mode != Mode::Semantic {
             let expr = query::fts_expression(residual);
-            lists.push(("lexical", 1.0, db.search_lexical_ids(&expr, CANDIDATES)?));
-            note_ids.extend(db.search_notes_lexical(&expr, 20)?);
+            let mut ids = db.search_lexical_ids(&expr, CANDIDATES)?;
+            let mut notes = db.search_notes_lexical(&expr, 20)?;
+            if ids.is_empty() && residual.contains(' ') {
+                // a sentence rarely appears word for word: any word, bm25-ranked
+                let any = query::fts_expression_any(residual);
+                ids = db.search_lexical_ids(&any, CANDIDATES)?;
+                if notes.is_empty() {
+                    notes = db.search_notes_lexical(&any, 20)?;
+                }
+            }
+            lists.push(("lexical", 1.0, ids));
+            note_ids.extend(notes);
         }
         if mode != Mode::Lexical {
             let qv = engine.embed_query(residual)?;

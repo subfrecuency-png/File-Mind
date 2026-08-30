@@ -629,6 +629,14 @@ impl Parsed {
     }
 }
 
+/// Any-word variant of [`fts_expression`] for when the strict form finds nothing.
+pub fn fts_expression_any(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| format!("\"{}\"", w.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
 /// Escape a residual for FTS5: each word quoted, joined with implicit AND,
 /// with prefix matching on the last word so partial names still hit.
 pub fn fts_expression(text: &str) -> String {
