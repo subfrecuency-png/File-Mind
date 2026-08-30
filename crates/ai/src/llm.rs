@@ -100,12 +100,24 @@ impl Ollama {
     }
 }
 
+impl Ollama {
+    /// Ollama's `:cloud` tags are served by Ollama's hosted service, not by
+    /// the local daemon — the text leaves the machine.
+    pub fn is_cloud_tag(model: &str) -> bool {
+        model.ends_with(":cloud") || model.contains("-cloud")
+    }
+}
+
 impl AiAdapter for Ollama {
     fn name(&self) -> &'static str {
-        "ollama"
+        if Self::is_cloud_tag(&self.model) {
+            "ollama-cloud"
+        } else {
+            "ollama"
+        }
     }
     fn is_local(&self) -> bool {
-        true
+        !Self::is_cloud_tag(&self.model)
     }
     fn complete(&self, payload: &Payload, instruction: &str) -> Result<String> {
         let prompt = format!(
@@ -118,12 +130,23 @@ impl AiAdapter for Ollama {
             "stream": false,
             "options": {"temperature": 0.1, "num_predict": 400}
         });
-        let v: serde_json::Value = agent()
+        let mut resp = match agent()
             .post(format!("{}/api/generate", self.url.trim_end_matches('/')))
             .send_json(&body)
-            .with_context(|| format!("ollama at {}", self.url))?
-            .body_mut()
-            .read_json()?;
+        {
+            Ok(r) => r,
+            Err(ureq::Error::StatusCode(404)) => {
+                let have = Self::models(&self.url).unwrap_or_default();
+                anyhow::bail!(
+                    "Ollama has no model named {:?}. Installed: {}. Use `filemind ai use ollama --model <name>` or `ollama pull {}`",
+                    self.model,
+                    if have.is_empty() { "(none)".to_string() } else { have.join(", ") },
+                    self.model
+                );
+            }
+            Err(e) => return Err(e).with_context(|| format!("ollama at {}", self.url)),
+        };
+        let v: serde_json::Value = resp.body_mut().read_json()?;
         v["response"]
             .as_str()
             .map(|s| s.trim().to_string())

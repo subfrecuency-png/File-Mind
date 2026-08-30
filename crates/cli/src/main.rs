@@ -976,6 +976,12 @@ fn run() -> Result<()> {
                         if let Some(u) = url {
                             cfg.ollama_url = u;
                         }
+                        if filemind_ai::llm::Ollama::is_cloud_tag(&cfg.ollama_model) {
+                            eprintln!(
+                                "note: {} is an Ollama *cloud* model — Ollama forwards each request to its hosted service, so `filemind ask` text leaves this machine. The audit log will mark these calls as ollama-cloud / CLOUD.",
+                                cfg.ollama_model
+                            );
+                        }
                     }
                     "cloud" => {
                         if let Some(m) = model {
