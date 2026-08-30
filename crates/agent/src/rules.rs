@@ -97,8 +97,19 @@ pub struct Evaluation {
 }
 
 /// Plan a rule against the current index. Nothing is touched; the manifest
-/// is validated against the disk so `problems` is meaningful.
+/// is validated against the disk so `problems` is meaningful. Contents are
+/// not hashed here (a dry run over gigabytes of downloads must stay cheap);
+/// `tick` hashes right before it executes.
 pub fn plan(adapter: &dyn OsAdapter, db: &Db, rule: &Rule) -> Result<(Manifest, Evaluation)> {
+    plan_with(adapter, db, rule, false)
+}
+
+fn plan_with(
+    adapter: &dyn OsAdapter,
+    db: &Db,
+    rule: &Rule,
+    hash_contents: bool,
+) -> Result<(Manifest, Evaluation)> {
     let kind = RuleKind::parse(&rule.kind, &rule.params).map_err(|e| anyhow::anyhow!(e))?;
     let now = Utc::now().timestamp();
     let mut m = Manifest::new(
@@ -278,7 +289,7 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, rule: &Rule) -> Result<(Manifest, 
     let mut problems = if m.steps.is_empty() {
         Vec::new()
     } else {
-        txn::validate(adapter, &allowed, &mut m)?
+        txn::validate_with(adapter, &allowed, &mut m, hash_contents)?
     };
     if let RuleKind::TrashExactDuplicates(_) = &kind {
         // the keeper of every trashed copy must still be present and intact
@@ -454,7 +465,10 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db) -> Result<Vec<TickOutcome>> {
         if rule.state == "paused" {
             continue;
         }
-        let (mut m, eval) = match plan(adapter, db, &rule) {
+        let live_candidate = rule.state == "armed" && mode == Mode::Automate;
+        // armed rules in automate mode hash their candidates so execution can
+        // refuse anything that changed; everyone else gets the cheap dry run
+        let (mut m, eval) = match plan_with(adapter, db, &rule, live_candidate) {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!(rule = rule.rule_id, error = %e, "rule plan failed");
@@ -469,7 +483,7 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db) -> Result<Vec<TickOutcome>> {
             }
         };
         let manifest_json = serde_json::to_value(&m)?;
-        let live = rule.state == "armed" && mode == Mode::Automate;
+        let live = live_candidate;
         if !live || m.steps.is_empty() || !eval.problems.is_empty() {
             db.record_automation_run(
                 rule.rule_id,

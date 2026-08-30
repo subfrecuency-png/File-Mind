@@ -238,6 +238,20 @@ pub fn validate(
     approved_roots: &[PathBuf],
     m: &mut Manifest,
 ) -> Result<Vec<String>> {
+    validate_with(adapter, approved_roots, m, true)
+}
+
+/// `validate` with the content hashing optional. Previews and dry runs pass
+/// `hash_contents = false`: they only need to know that every source exists,
+/// is not a link, is inside an approved root and has a free destination.
+/// Hashing (which reads every file in full) happens once, right before
+/// execution, which is what makes "changed since it was planned" meaningful.
+pub fn validate_with(
+    adapter: &dyn OsAdapter,
+    approved_roots: &[PathBuf],
+    m: &mut Manifest,
+    hash_contents: bool,
+) -> Result<Vec<String>> {
     let mut problems = Vec::new();
     let protected = adapter.protected_roots();
     let inside = |p: &Path| approved_roots.iter().any(|r| p.starts_with(r));
@@ -265,7 +279,7 @@ pub fn validate(
                 src.display()
             )),
             Some(e) => {
-                if e.kind == crate::model::EntryKind::File {
+                if e.kind == crate::model::EntryKind::File && hash_contents {
                     match hash_file(&src) {
                         Ok(h) => match s.hash_before() {
                             Some(prev) if prev != h => problems.push(format!(
