@@ -41,7 +41,12 @@ pub fn schedule_from_settings(db: &Db) -> Schedule {
 }
 
 /// One tick: scan every root, then hash within budget. Returns a one-line summary.
-pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String> {
+pub fn tick(
+    adapter: &dyn OsAdapter,
+    db: &Db,
+    engine: &crate::semantic::Engine,
+    sched: Schedule,
+) -> Result<String> {
     let _slot = crate::jobs::heavy();
     let scans = pipeline::scan_all(adapter, db)?;
     let mut files = 0;
@@ -68,8 +73,21 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
         },
     )?;
     let a = crate::analysis::run(db)?;
+    let pruned = crate::semantic::prune(db, engine)?;
+    let e = crate::semantic::embed_pending(
+        db,
+        engine,
+        crate::semantic::EmbedOpts {
+            duty_cycle: sched.hash_duty_cycle,
+            max_wall: Some(sched.hash_budget),
+            ..Default::default()
+        },
+    )?;
+    if pruned > 0 {
+        tracing::info!(pruned, "stale vectors dropped");
+    }
     Ok(format!(
-        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  health {}  dup groups {} ({})  version chains {}  suggestions {}  projects {}",
+        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  embedded {} (+{} pending, {})  health {}  dup groups {} ({})  version chains {}  suggestions {}  projects {}",
         scans.len(),
         files,
         changed,
@@ -78,6 +96,9 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
         c.classified,
         c.remaining,
         c.sensitive,
+        e.embedded,
+        e.remaining,
+        engine.model_id(),
         a.health.score,
         a.duplicate_groups,
         filemind_core::health::human(a.duplicate_bytes),
@@ -88,10 +109,15 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db, sched: Schedule) -> Result<String>
 }
 
 /// Run forever. `once = true` runs a single tick and returns.
-pub fn run(adapter: &dyn OsAdapter, db: &Db, once: bool) -> Result<()> {
+pub fn run(
+    adapter: &dyn OsAdapter,
+    db: &Db,
+    engine: &crate::semantic::Engine,
+    once: bool,
+) -> Result<()> {
     loop {
         let sched = schedule_from_settings(db);
-        match tick(adapter, db, sched) {
+        match tick(adapter, db, engine, sched) {
             Ok(summary) => tracing::info!(%summary, "tick"),
             Err(e) => tracing::error!(error = %e, "tick failed"),
         }

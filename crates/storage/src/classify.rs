@@ -265,6 +265,11 @@ fn write_classification(
                 )
                 .optional()?;
             if let Some((rowid, name, path)) = row {
+                tx.execute(
+                    "INSERT INTO file_text(file_id, mtime, head) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(file_id) DO UPDATE SET mtime = excluded.mtime, head = excluded.head",
+                    params![file_id, mtime, filemind_core::classify::head(t, crate::semantic::TEXT_HEAD_BYTES)],
+                )?;
                 tx.execute("DELETE FROM files_fts WHERE rowid = ?1", [rowid])?;
                 tx.execute(
                     "INSERT INTO files_fts(rowid, name, path_tokens, extracted_text) VALUES (?1, ?2, ?3, ?4)",

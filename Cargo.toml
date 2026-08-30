@@ -31,6 +31,7 @@ directories = "5"
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 tempfile = "3"
+filetime = "0.2"
 notify = "8"
 pdf-extract = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -25,7 +25,7 @@ FileMind AI is a local-first desktop product (macOS, Windows 10/11) that continu
 ### 2.2 Storage
 
 - **SQLite** (WAL mode) is the system of record: file inventory, events, classifications, projects, transactions, settings. One database per user at `~/Library/Application Support/FileMind/filemind.db` (macOS) or `%LOCALAPPDATA%\FileMind\filemind.db` (Windows).
-- **LanceDB** (embedded, Rust-native, on disk beside the SQLite file) holds embeddings. Chosen over FAISS (no persistence/metadata story, C++ build friction) and Chroma (Python server). Row IDs in Lance reference `file_id` in SQLite.
+- **Embeddings live in SQLite too** (`embeddings` table, int8-quantised unit vectors, 384 bytes each) and are scanned brute-force in memory (`core::vectors::VecIndex`, multi-threaded). *As built in Phase 7*: measured 42 ms average / 63 ms worst for top-300 over 500 k vectors on two cores, which clears the p95 < 150 ms target without a second storage engine. LanceDB (the original plan) remains the upgrade path if an index ever passes ~1 M subjects; it would slot in behind the same `search(query, k)` signature.
 - **SQLite FTS5** provides the lexical search layer (filenames, paths, extracted text); semantic and lexical results are fused at query time.
 
 ### 2.3 AI stack
@@ -148,7 +148,7 @@ The heart of "Protect".
 - Deletion is always **trash/Recycle Bin**, never `unlink`.
 
 ### 4.9 Search & Memory
-- **Search**: hybrid — FTS5 BM25 + LanceDB cosine → reciprocal-rank fusion → metadata filters (type, date, project, root). Sub-100 ms target on 500 k files.
+- **Search**: hybrid — FTS5 BM25 + cosine over the in-memory vector index → reciprocal-rank fusion (k = 60) → metadata filters (type, date, project, folder, size, sensitive, duplicates). *As built*: `core::query` parses the natural-language part deterministically (seasons, months, "last 3 weeks", kinds, sizes, "in project X", "in downloads"); when the filters leave nothing, the search is retried with filters relaxed and says so. Embedder: `bge-small-en-v1.5` (ONNX, CLS pooling, query prefix) downloaded once with `filemind model download`; a hash-of-ngrams embedder stands in until then. Files are embedded from name + path words + category + the first 2 KB of extracted text (`file_text`); sensitive files are never embedded. Benchmark (`crates/agent/tests/semantic.rs`): top-5 hit rate 100 %, top-1 97 % on 40 paraphrased queries, ~10 ms per query.
 - **Memory** (semantic layer over search): a `memory_notes` table where the system and user attach facts to files and projects ("sent to accountant 2026-03-04", "final version for client"), plus an event timeline. Natural-language queries are parsed by a small local intent model (or the AI adapter) into structured filters + free-text; results are explained ("matched because: edited March 3–5, project *Q1 Taxes*, mentions 'Schedule C'").
 
 ### 4.10 Policy / Mode engine
@@ -184,7 +184,7 @@ memory_notes(note_id PK, subject_type ENUM(file,project), subject_id, text, sour
 health_snapshots(ts, root_id NULL, score, components JSON)
 settings(key PK, value JSON)
 ```
-LanceDB table `embeddings(embedding_id, blob_id, chunk_no, vector[384], text_preview)`.
+`embeddings(subject PK, model, dim, vec BLOB int8, input_hash, ts)` — `subject` is a `file_id` or `note:<id>`; `file_text(file_id PK, mtime, head)` keeps the first 2 KB of extracted text; `notes_fts` mirrors `memory_notes`; `ai_audit` gained `snippet_hash, local, ok, latency_ms`.
 
 ---
 

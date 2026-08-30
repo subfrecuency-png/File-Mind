@@ -12,6 +12,7 @@ path = "src/main.rs"
 filemind-core = { path = "../core" }
 filemind-storage = { path = "../storage" }
 filemind-agent = { path = "../agent" }
+filemind-ai = { path = "../ai" }
 anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true

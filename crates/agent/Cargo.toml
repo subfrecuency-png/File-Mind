@@ -36,3 +36,5 @@ filemind-adapter-win = { path = "../adapter-win" }
 [dev-dependencies]
 walkdir.workspace = true
 tempfile.workspace = true
+filetime.workspace = true
+chrono.workspace = true

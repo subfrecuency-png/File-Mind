@@ -16,8 +16,11 @@ pub mod health;
 pub mod mode;
 pub mod model;
 pub mod projects;
+pub mod query;
+pub mod rank;
 pub mod scanner;
 pub mod txn;
+pub mod vectors;
 pub mod versions;
 pub mod watch;
 

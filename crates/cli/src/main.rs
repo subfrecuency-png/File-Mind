@@ -45,11 +45,44 @@ enum Cmd {
         #[arg(long)]
         minutes: Option<u64>,
     },
-    /// Lexical search over names and paths (semantic search arrives in Phase 7).
+    /// Search by meaning and words: "offer sheet for the calcium supplier from last spring, pdf".
     Search {
         query: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Words only (FTS5), no vectors.
+        #[arg(long, conflicts_with = "semantic")]
+        lexical: bool,
+        /// Vectors only.
+        #[arg(long)]
+        semantic: bool,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask a question about your files; answered by the configured AI adapter over the top search hits.
+    Ask { question: String },
+    /// Remember something about a file or folder. Notes are searchable.
+    Note {
+        #[command(subcommand)]
+        cmd: NoteCmd,
+    },
+    /// Build vectors for files that have none yet (throttled).
+    Embed {
+        #[arg(long, default_value_t = 0.5)]
+        duty: f32,
+        #[arg(long)]
+        minutes: Option<u64>,
+    },
+    /// The local embedding model (bge-small, ~130 MB, downloaded once).
+    Model {
+        #[command(subcommand)]
+        cmd: ModelCmd,
+    },
+    /// Which AI adapter answers `ask`: none, ollama (local) or cloud (opt-in). Plus the audit log.
+    Ai {
+        #[command(subcommand)]
+        cmd: AiCmd,
     },
     /// Get or set the operating mode (observe | assist | automate).
     Mode {
@@ -126,6 +159,49 @@ enum Cmd {
     Dev {
         #[command(subcommand)]
         cmd: DevCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// Attach a note to a file or folder path.
+    Add { path: PathBuf, text: String },
+    /// Notes on one path, or all notes.
+    List { path: Option<PathBuf> },
+    /// Delete a note by id.
+    Rm { id: i64 },
+}
+
+#[derive(Subcommand)]
+enum ModelCmd {
+    /// Is the model installed, and how much of the index has vectors?
+    Status,
+    /// Download and verify the model files.
+    Download,
+}
+
+#[derive(Subcommand)]
+enum AiCmd {
+    /// Current adapter and whether Ollama is reachable.
+    Status,
+    /// Choose the adapter: none | ollama | cloud.
+    Use {
+        #[arg(value_parser = ["none", "ollama", "cloud"])]
+        adapter: String,
+        /// Model name (ollama: e.g. llama3.2; cloud: an Anthropic model id).
+        #[arg(long)]
+        model: Option<String>,
+        /// API key for the cloud adapter (stored in FileMind's database).
+        #[arg(long)]
+        key: Option<String>,
+        /// Ollama base URL.
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// What has been sent to which adapter (never the text itself).
+    Audit {
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
     },
 }
 
@@ -263,6 +339,65 @@ fn print_scan(v: &Value) {
     );
 }
 
+fn print_search(v: &Value) {
+    let notes: Vec<String> = v["parsed"]["notes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let residual = v["parsed"]["text"].as_str().unwrap_or("");
+    let mut head = Vec::new();
+    if !residual.is_empty() {
+        head.push(format!("looking for \"{residual}\""));
+    }
+    head.extend(notes);
+    if !head.is_empty() {
+        println!("{}", head.join("  ·  "));
+    }
+    if v["semantic"].as_bool() != Some(true) {
+        println!("(embedding model not installed: word matching only — `filemind model download`)");
+    }
+    let hits = v["hits"].as_array().cloned().unwrap_or_default();
+    if hits.is_empty() {
+        println!("no matches");
+    }
+    for (i, h) in hits.iter().enumerate() {
+        let via: Vec<&str> = h["via"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        println!("{:>3}  {}", i + 1, h["path"].as_str().unwrap_or("?"));
+        println!(
+            "     {}  {:>9}  {}{}  via {}",
+            fmt_ts(h["mtime"].as_i64().unwrap_or(0)),
+            human_bytes(h["size"].as_u64().unwrap_or(0)),
+            h["category"].as_str().unwrap_or("-"),
+            if h["sensitive"].as_bool() == Some(true) {
+                "  ⚠ sensitive"
+            } else {
+                ""
+            },
+            via.join(", ")
+        );
+    }
+    let notes = v["notes"].as_array().cloned().unwrap_or_default();
+    if !notes.is_empty() {
+        println!("notes:");
+        for n in notes {
+            println!(
+                "  #{} {}  — {}",
+                n["note_id"],
+                n["text"].as_str().unwrap_or(""),
+                n["subject_id"].as_str().unwrap_or("")
+            );
+        }
+    }
+    println!("({} ms)", v["elapsed_ms"]);
+}
+
 fn print_plan(v: &Value) {
     println!(
         "plan {}  ({} step(s), risk tier {}, mode {})",
@@ -281,6 +416,12 @@ fn open_db() -> Result<(PathBuf, Db)> {
     let path = filemind_storage::default_db_path()?;
     let db = Db::open(&path)?;
     Ok((path, db))
+}
+
+fn fmt_ts(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "?".into())
 }
 
 fn human_bytes(b: u64) -> String {
@@ -561,31 +702,335 @@ fn run() -> Result<()> {
             );
         }
 
-        Cmd::Search { query, limit } => {
-            if let Some(mut a) = agent() {
-                for r in a
-                    .call("search", json!({"query": query, "limit": limit}))?
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                {
-                    let p = r["path"].as_str().unwrap_or("?");
-                    match r["status"].as_str() {
-                        Some("present") | None => println!("{p}"),
-                        Some(s) => println!("{p}  [{s}]"),
-                    }
-                }
+        Cmd::Search {
+            query,
+            limit,
+            lexical,
+            semantic,
+            json: as_json,
+        } => {
+            let mode = if lexical {
+                "lexical"
+            } else if semantic {
+                "semantic"
+            } else {
+                "hybrid"
+            };
+            let v = if let Some(mut a) = agent() {
+                a.call(
+                    "search",
+                    json!({"query": query, "limit": limit, "mode": mode}),
+                )?
+            } else {
+                let (_, db) = open_db()?;
+                let engine = filemind_agent::semantic::Engine::open(&db)?;
+                let m = match mode {
+                    "lexical" => filemind_agent::semantic::Mode::Lexical,
+                    "semantic" => filemind_agent::semantic::Mode::Semantic,
+                    _ => filemind_agent::semantic::Mode::Hybrid,
+                };
+                json!(filemind_agent::semantic::search(
+                    &db, &engine, &query, limit, m
+                )?)
+            };
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
                 return Ok(());
             }
-            let (_, db) = open_db()?;
-            for (p, status) in db.search_lexical(&query, limit)? {
-                if status == "present" {
-                    println!("{}", p.display());
+            print_search(&v);
+        }
+
+        Cmd::Ask { question } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("ask", json!({"question": question}))?
+            } else {
+                let (_, db) = open_db()?;
+                let engine = filemind_agent::semantic::Engine::open(&db)?;
+                let cfg = filemind_agent::semantic::ai_config(&db);
+                let adapter = cfg.build();
+                json!(filemind_agent::semantic::ask(
+                    &db,
+                    &engine,
+                    adapter.as_ref(),
+                    &question
+                )?)
+            };
+            println!("{}", v["answer"].as_str().unwrap_or(""));
+            println!();
+            for (i, h) in v["hits"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
+                println!("  [{}] {}", i + 1, h["path"].as_str().unwrap_or("?"));
+            }
+            println!(
+                "\n({} adapter, {} bytes sent{})",
+                v["adapter"].as_str().unwrap_or("?"),
+                v["bytes_sent"],
+                if v["local"].as_bool() == Some(true) {
+                    ", stayed on this machine"
                 } else {
-                    println!("{}  [{status}]", p.display());
+                    ", sent to the cloud"
+                }
+            );
+        }
+
+        Cmd::Note { cmd } => match cmd {
+            NoteCmd::Add { path, text } => {
+                let path = path.canonicalize().unwrap_or(path);
+                let kind = if path.is_dir() { "folder" } else { "file" };
+                let v = if let Some(mut a) = agent() {
+                    a.call(
+                        "notes.add",
+                        json!({"subject": path, "text": text, "kind": kind}),
+                    )?
+                } else {
+                    let (_, db) = open_db()?;
+                    let n = db.add_note(kind, &path.to_string_lossy(), &text, "user")?;
+                    let engine = filemind_agent::semantic::Engine::open(&db)?;
+                    let _ = filemind_agent::semantic::embed_pending(
+                        &db,
+                        &engine,
+                        filemind_agent::semantic::EmbedOpts {
+                            max_wall: Some(std::time::Duration::from_millis(1)),
+                            ..Default::default()
+                        },
+                    );
+                    json!(n)
+                };
+                println!("note #{} on {}", v["note_id"], path.display());
+            }
+            NoteCmd::List { path } => {
+                let subject = path.map(|p| p.canonicalize().unwrap_or(p));
+                let v = if let Some(mut a) = agent() {
+                    a.call("notes.list", json!({"subject": subject, "limit": 100}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(db.list_notes(
+                        subject
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .as_deref(),
+                        100
+                    )?)
+                };
+                let items = v.as_array().cloned().unwrap_or_default();
+                if items.is_empty() {
+                    println!("(no notes)");
+                }
+                for n in items {
+                    println!(
+                        "#{:<5} {}  {}\n       {}",
+                        n["note_id"],
+                        fmt_ts(n["ts"].as_i64().unwrap_or(0)),
+                        n["subject_id"].as_str().unwrap_or("?"),
+                        n["text"].as_str().unwrap_or("")
+                    );
                 }
             }
+            NoteCmd::Rm { id } => {
+                let ok = if let Some(mut a) = agent() {
+                    a.call("notes.remove", json!({"id": id}))?["ok"].as_bool() == Some(true)
+                } else {
+                    let (_, db) = open_db()?;
+                    db.remove_note(id)?
+                };
+                println!("{}", if ok { "removed" } else { "no such note" });
+            }
+        },
+
+        Cmd::Embed { duty, minutes } => {
+            let v = if let Some(mut a) = agent() {
+                a.call("embed.run", json!({"duty": duty, "minutes": minutes}))?
+            } else {
+                let (_, db) = open_db()?;
+                let engine = filemind_agent::semantic::Engine::open(&db)?;
+                json!(filemind_agent::semantic::embed_pending(
+                    &db,
+                    &engine,
+                    filemind_agent::semantic::EmbedOpts {
+                        duty_cycle: duty,
+                        max_wall: minutes.map(|m| std::time::Duration::from_secs(m * 60)),
+                        ..Default::default()
+                    }
+                )?)
+            };
+            println!(
+                "embedded {} files (+{} notes), {} unchanged, {} still pending, in {:.1}s",
+                v["embedded"],
+                v["notes"],
+                v["unchanged"],
+                v["remaining"],
+                v["elapsed_ms"].as_u64().unwrap_or(0) as f64 / 1000.0
+            );
         }
+
+        Cmd::Model { cmd } => match cmd {
+            ModelCmd::Status => {
+                let spec = filemind_ai::embed::BGE_SMALL;
+                println!(
+                    "{}  {}  ({})",
+                    spec.id,
+                    if spec.is_installed() {
+                        "installed"
+                    } else {
+                        "NOT installed — run `filemind model download`"
+                    },
+                    spec.dir()?.display()
+                );
+                let v = if let Some(mut a) = agent() {
+                    a.call("embed.status", json!({}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    let engine = filemind_agent::semantic::Engine::open(&db)?;
+                    let (have, pending) = db.embedding_stats(engine.model_id())?;
+                    json!({"model": engine.model_id(), "semantic": engine.is_semantic(), "vectors": engine.vectors(), "embedded": have, "pending": pending})
+                };
+                println!(
+                    "index    {} vectors under {}  ({} files embedded, {} pending){}",
+                    v["vectors"],
+                    v["model"].as_str().unwrap_or("?"),
+                    v["embedded"],
+                    v["pending"],
+                    if v["semantic"].as_bool() == Some(true) {
+                        ""
+                    } else {
+                        "  [hash fallback: lexical-ish only]"
+                    }
+                );
+            }
+            ModelCmd::Download => {
+                let spec = filemind_ai::embed::BGE_SMALL;
+                let mut last = 0u64;
+                let dir = spec.download(&mut |name, got, total| {
+                    if got - last > (8 << 20) || got == total {
+                        last = got;
+                        eprint!("\r{name}: {} / {}   ", human_bytes(got), human_bytes(total));
+                    }
+                })?;
+                eprintln!();
+                println!("installed in {}", dir.display());
+                if agent().is_some() {
+                    println!("restart the agent (`filemind agent stop`, then start) so it picks the model up; vectors are built in the background.");
+                }
+            }
+        },
+
+        Cmd::Ai { cmd } => match cmd {
+            AiCmd::Status => {
+                let cfg: filemind_ai::llm::Config = if let Some(mut a) = agent() {
+                    serde_json::from_value(a.call("ai.get", json!({}))?)?
+                } else {
+                    let (_, db) = open_db()?;
+                    filemind_agent::semantic::ai_config(&db)
+                };
+                println!(
+                    "adapter  {}",
+                    serde_json::to_value(&cfg.adapter)?.as_str().unwrap_or("?")
+                );
+                let up = filemind_ai::llm::Ollama::reachable(&cfg.ollama_url);
+                println!(
+                    "ollama   {} at {}  (model {})",
+                    if up { "reachable" } else { "not running" },
+                    cfg.ollama_url,
+                    cfg.ollama_model
+                );
+                if up {
+                    if let Ok(m) = filemind_ai::llm::Ollama::models(&cfg.ollama_url) {
+                        println!("         available: {}", m.join(", "));
+                    }
+                }
+                println!(
+                    "cloud    model {}  key {}",
+                    cfg.cloud_model,
+                    if !cfg.cloud_key.is_empty() {
+                        "stored"
+                    } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                        "from ANTHROPIC_API_KEY"
+                    } else {
+                        "none"
+                    }
+                );
+            }
+            AiCmd::Use {
+                adapter: which,
+                model,
+                key,
+                url,
+            } => {
+                let (_, db) = open_db()?;
+                let mut cfg = filemind_agent::semantic::ai_config(&db);
+                cfg.adapter = match which.as_str() {
+                    "ollama" => filemind_ai::llm::Kind::Ollama,
+                    "cloud" => filemind_ai::llm::Kind::Cloud,
+                    _ => filemind_ai::llm::Kind::None,
+                };
+                match which.as_str() {
+                    "ollama" => {
+                        if let Some(m) = model {
+                            cfg.ollama_model = m;
+                        }
+                        if let Some(u) = url {
+                            cfg.ollama_url = u;
+                        }
+                    }
+                    "cloud" => {
+                        if let Some(m) = model {
+                            cfg.cloud_model = m;
+                        }
+                        if let Some(k) = key {
+                            cfg.cloud_key = k;
+                        }
+                        eprintln!("note: with the cloud adapter, `filemind ask` sends file names, folders, dates and short excerpts (≤ 2 KB per question) to Anthropic's API. Every call is listed in `filemind ai audit`.");
+                    }
+                    _ => {}
+                }
+                if let Some(mut a) = agent() {
+                    a.call("ai.set", serde_json::to_value(&cfg)?)?;
+                } else {
+                    filemind_agent::semantic::set_ai_config(&db, &cfg)?;
+                }
+                println!("adapter set to {which}");
+            }
+            AiCmd::Audit { limit } => {
+                let v = if let Some(mut a) = agent() {
+                    a.call("ai.audit", json!({"limit": limit}))?
+                } else {
+                    let (_, db) = open_db()?;
+                    json!(db.list_ai_audit(limit)?)
+                };
+                let rows = v.as_array().cloned().unwrap_or_default();
+                if rows.is_empty() {
+                    println!("(nothing has been sent to any adapter)");
+                }
+                for r in rows {
+                    println!(
+                        "{}  {:<7} {:<8} {:>6} B  {}  {}{}",
+                        fmt_ts(r["ts"].as_i64().unwrap_or(0)),
+                        r["adapter"].as_str().unwrap_or("?"),
+                        r["purpose"].as_str().unwrap_or("?"),
+                        r["bytes_sent"],
+                        if r["local"].as_bool() == Some(true) {
+                            "local"
+                        } else {
+                            "CLOUD"
+                        },
+                        if r["ok"].as_bool() == Some(true) {
+                            "ok"
+                        } else {
+                            "failed"
+                        },
+                        r["latency_ms"]
+                            .as_i64()
+                            .map(|m| format!("  {m} ms"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        },
 
         Cmd::Mode { value } => {
             if let Some(mut a) = agent() {
@@ -1344,9 +1789,10 @@ fn run() -> Result<()> {
             AgentCmd::RunOnce => {
                 let (_, db) = open_db()?;
                 let sched = filemind_agent::scheduler::schedule_from_settings(&db);
+                let engine = filemind_agent::semantic::Engine::open(&db)?;
                 println!(
                     "{}",
-                    filemind_agent::scheduler::tick(adapter.as_ref(), &db, sched)?
+                    filemind_agent::scheduler::tick(adapter.as_ref(), &db, &engine, sched)?
                 );
             }
         },

@@ -5,6 +5,7 @@ pub mod classify;
 pub mod inventory;
 pub mod journal;
 pub mod projects;
+pub mod semantic;
 
 pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use inventory::{Root, UpsertStats};
@@ -33,6 +34,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0005_projects",
         include_str!("../migrations/0005_projects.sql"),
+    ),
+    (
+        "0006_semantic",
+        include_str!("../migrations/0006_semantic.sql"),
     ),
 ];
 
@@ -187,14 +192,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 5);
+            assert_eq!(db.schema_version().unwrap(), 6);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 5);
+        assert_eq!(db.schema_version().unwrap(), 6);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }

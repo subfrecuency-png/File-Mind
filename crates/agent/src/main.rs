@@ -46,8 +46,13 @@ fn main() -> Result<()> {
         Err(e) => tracing::error!(error = %e, "recovery failed"),
     }
 
+    let engine = Arc::new(filemind_agent::semantic::Engine::open(&db)?);
+    if !engine.is_semantic() {
+        tracing::warn!("embedding model not installed — search is lexical + hash fallback; run `filemind model download`");
+    }
+
     if once {
-        return scheduler::run(adapter.as_ref(), &db, true);
+        return scheduler::run(adapter.as_ref(), &db, &engine, true);
     }
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -81,6 +86,7 @@ fn main() -> Result<()> {
             adapter: adapter.clone(),
             db_path: db_path.clone(),
             db: Mutex::new(filemind_storage::Db::open(&db_path)?),
+            engine: engine.clone(),
             stats: stats.clone(),
             started: Instant::now(),
         });
@@ -97,7 +103,7 @@ fn main() -> Result<()> {
     // Scheduler runs on the main thread.
     while !stop.load(Ordering::Relaxed) {
         let sched = scheduler::schedule_from_settings(&db);
-        match scheduler::tick(adapter.as_ref(), &db, sched) {
+        match scheduler::tick(adapter.as_ref(), &db, &engine, sched) {
             Ok(summary) => tracing::info!(%summary, "tick"),
             Err(e) => tracing::error!(error = %e, "tick failed"),
         }

@@ -1,11 +1,14 @@
 //! AI adapters. Local processing is the default; every adapter call is
 //! minimal (filename + ≤ 2 KB snippet) and audited.
 //!
-//! Phase 4 adds the ONNX classifier, Phase 7 the ONNX embedder (`ort`) and
-//! the Ollama / cloud HTTP adapters.
+//! `embed`: the ONNX embedder (bge-small via `ort`) and a hash fallback.
+//! `llm`: Ollama (local) and cloud (opt-in) completion adapters.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+pub mod embed;
+pub mod llm;
 
 /// Hard cap on text sent to any adapter, per call.
 pub const MAX_SNIPPET_BYTES: usize = 2048;
@@ -24,6 +27,7 @@ pub enum Purpose {
     ProjectName,
     ParseQuery,
     Summarize,
+    Ask,
 }
 
 impl Payload {

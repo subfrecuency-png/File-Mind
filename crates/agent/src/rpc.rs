@@ -26,6 +26,7 @@ pub struct Context {
     pub db_path: PathBuf,
     /// One writer connection shared by RPC handlers.
     pub db: Mutex<Db>,
+    pub engine: Arc<crate::semantic::Engine>,
     pub stats: Arc<WatchStats>,
     pub started: Instant,
 }
@@ -147,11 +148,98 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("query required"))?;
             let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
-            Ok(json!(db
-                .search_lexical(q, limit)?
-                .into_iter()
-                .map(|(path, status)| json!({"path": path, "status": status}))
-                .collect::<Vec<_>>()))
+            let mode: crate::semantic::Mode = p
+                .get("mode")
+                .cloned()
+                .and_then(|m| serde_json::from_value(m).ok())
+                .unwrap_or(crate::semantic::Mode::Hybrid);
+            Ok(json!(crate::semantic::search(
+                &db,
+                &ctx.engine,
+                q,
+                limit,
+                mode
+            )?))
+        }
+        "ask" => {
+            let q = p
+                .get("question")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("question required"))?;
+            let cfg = crate::semantic::ai_config(&db);
+            let adapter = cfg.build();
+            Ok(json!(crate::semantic::ask(
+                &db,
+                &ctx.engine,
+                adapter.as_ref(),
+                q
+            )?))
+        }
+        "embed.run" => {
+            let _slot = crate::jobs::heavy();
+            let minutes = p.get("minutes").and_then(Value::as_u64);
+            let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
+            Ok(json!(crate::semantic::embed_pending(
+                &db,
+                &ctx.engine,
+                crate::semantic::EmbedOpts {
+                    duty_cycle: duty,
+                    max_wall: minutes.map(|m| Duration::from_secs(m * 60)),
+                    ..Default::default()
+                }
+            )?))
+        }
+        "embed.status" => {
+            let (have, pending) = db.embedding_stats(ctx.engine.model_id())?;
+            Ok(json!({
+                "model": ctx.engine.model_id(), "semantic": ctx.engine.is_semantic(),
+                "vectors": ctx.engine.vectors(), "embedded": have, "pending": pending,
+                "model_installed": filemind_ai::embed::BGE_SMALL.is_installed(),
+            }))
+        }
+        "notes.add" => {
+            let subject = p
+                .get("subject")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("subject required"))?;
+            let text = p
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("text required"))?;
+            let kind = p.get("kind").and_then(Value::as_str).unwrap_or("file");
+            let n = db.add_note(kind, subject, text, "user")?;
+            // index it right away so it is searchable immediately
+            let _ = crate::semantic::embed_pending(
+                &db,
+                &ctx.engine,
+                crate::semantic::EmbedOpts {
+                    max_wall: Some(Duration::from_millis(1)),
+                    ..Default::default()
+                },
+            );
+            Ok(json!(n))
+        }
+        "notes.list" => {
+            let subject = p.get("subject").and_then(Value::as_str);
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+            Ok(json!(db.list_notes(subject, limit)?))
+        }
+        "notes.remove" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!({"ok": db.remove_note(id)?}))
+        }
+        "ai.get" => Ok(json!(crate::semantic::ai_config(&db))),
+        "ai.set" => {
+            let cfg: filemind_ai::llm::Config = serde_json::from_value(p.clone())?;
+            crate::semantic::set_ai_config(&db, &cfg)?;
+            Ok(json!(cfg))
+        }
+        "ai.audit" => {
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+            Ok(json!(db.list_ai_audit(limit)?))
         }
         "mode.get" => Ok(db.get_setting("mode")?.unwrap_or(json!("observe"))),
         "mode.set" => {
