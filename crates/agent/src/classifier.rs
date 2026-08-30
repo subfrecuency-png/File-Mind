@@ -80,7 +80,17 @@ pub fn classify_pending(db: &Db, opts: ClassifyOpts) -> Result<ClassifyOutcome> 
             if opts.max_wall.is_some_and(|w| started.elapsed() >= w) {
                 break;
             }
-            let (c, sens, text) = classify_path(&p.path, p.size, &rules, opts.names_only);
+            // A parser bug on one odd file (a malformed PDF, an unexpected
+            // encoding) must not take the agent down: fall back to name-only.
+            let (c, sens, text) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || classify_path(&p.path, p.size, &rules, opts.names_only),
+            )) {
+                Ok(r) => r,
+                Err(_) => {
+                    tracing::warn!(path = %p.path.display(), "classifier panicked on file; using name only");
+                    classify_path(&p.path, p.size, &rules, true)
+                }
+            };
             if text.is_some() {
                 out.extracted += 1;
             }

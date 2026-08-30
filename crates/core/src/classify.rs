@@ -291,9 +291,21 @@ pub fn sensitive_by_name(path: &Path) -> Option<Sensitive> {
     None
 }
 
+/// At most `max` bytes of `text`, never splitting a multi-byte character.
+pub fn head(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// Scan an excerpt of text for secrets and identifiers.
 pub fn sensitive_by_text(text: &str) -> Option<Sensitive> {
-    let t: &str = &text[..text.len().min(64 * 1024)];
+    let t: &str = head(text, 64 * 1024);
     if t.contains("-----BEGIN") && t.contains("PRIVATE KEY") {
         return Some(Sensitive::PrivateKey);
     }
@@ -520,5 +532,24 @@ mod tests {
             sensitive_by_text("just an ordinary letter about 2025 plans"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod head_tests {
+    use super::*;
+
+    #[test]
+    fn head_never_splits_a_character() {
+        // 65_534 ASCII bytes then a 3-byte CJK char straddling the 64 KB mark
+        let mut t = "a".repeat(65_534);
+        t.push('函');
+        t.push_str(" more text");
+        let h = head(&t, 64 * 1024);
+        assert_eq!(h.len(), 65_534);
+        assert!(sensitive_by_text(&t).is_none());
+        assert_eq!(head("héllo", 2), "h");
+        assert_eq!(head("héllo", 3), "hé");
+        assert_eq!(head("", 10), "");
     }
 }
