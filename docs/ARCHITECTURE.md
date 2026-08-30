@@ -139,6 +139,9 @@ Clusters files into projects using path co-location, temporal co-editing (files 
 ### 4.7 Archive
 Moves cold projects (no activity > 180 days, configurable) to `~/FileMind Archive/<Year>/<Project>/` as a transaction, leaving an optional `.webloc`/`.lnk` breadcrumb. Archived files stay fully searchable; Memory answers "it's in the archive, here's the link".
 
+### 4.7b Shrink (Phase 11)
+Reclaim disk space losslessly, measured before promised. *As built (estimate)*: `core::shrink::estimate` walks the index once (`storage::shrink_rows`, one streamed query with the effective category and the file's cold folder-backed project), sorts every present file into at most one disjoint bucket — tier 3 `cold_archive` (files of a `cold` marker/folder project), tier 1 `apfs` (allow-listed raw/text extensions, untouched ≥ 30 days, ≥ 4 KiB), tier 2 `media_lossless` (JPEG/PNG) — never sensitive files, noise dirs, `Library`, app bundles. Per bucket it keeps a size-weighted reservoir sample (A-Res, 48 files), reads three 64 KiB windows of each and compresses them in memory (zlib ≈ APFS, zstd -19 ≈ the archiver); the mean sampled ratio applied to the bucket's bytes is the estimate. Tier 2 is not probed — it reports documented typical ratios and says `measured: false`. Report cached as JSON in `settings.shrink.estimate` (fresh 24 h); RPC `shrink.estimate` (`refresh`, `cached_only`) and job kind `shrink.estimate`; CLI `filemind shrink estimate [--refresh] [--json]`; Overview "Shrinkable" tile. Rewrites (APFS `Step::Rewrite`, archives, JXL/PNG) follow as journaled, verified, undoable transactions — see `docs/PHASE9_10_AND_SHRINK_PLAN.md` §3.
+
 ### 4.8 Transaction Manager & Recovery
 The heart of "Protect".
 - Every mutating operation (move, rename, trash, archive, restore) is a **transaction** with a manifest written *before* execution: `txn_id`, mode, initiator (user/auto), list of `(file_id, from, to, hash_before)`, and a dry-run diff.

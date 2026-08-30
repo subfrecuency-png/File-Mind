@@ -454,6 +454,25 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 "health": a.health, "elapsed_ms": a.elapsed_ms
             }))
         }
+        "shrink.estimate" => {
+            // `cached_only`: never compute (the Overview tile); `refresh`: always compute.
+            let refresh = p.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+            let cached_only = p
+                .get("cached_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !refresh {
+                if let Some(v) = crate::shrink::cached(&db)? {
+                    return Ok(json!({"estimate": v, "cached": true}));
+                }
+            }
+            if cached_only {
+                return Ok(json!({"estimate": db.shrink_estimate()?, "cached": true}));
+            }
+            let _slot = crate::jobs::heavy();
+            let est = crate::shrink::run_estimate(&db, |_, _| {})?;
+            Ok(json!({"estimate": est, "cached": false}))
+        }
         "health" => {
             let h = filemind_core::health::score(&db.health_inputs(None)?);
             let mut roots = Vec::new();
@@ -811,6 +830,17 @@ fn start_job(ctx: &Context, kind: &str, p: &Value) -> Result<crate::jobs::JobInf
                 )
             })
         }
+        "shrink.estimate" => crate::jobs::spawn(
+            "shrink.estimate",
+            "measuring what Shrink could reclaim",
+            move |prog| {
+                let db = Db::open(&db_path)?;
+                let est = crate::shrink::run_estimate(&db, |done, total| {
+                    prog.set("sampling files", done, total)
+                })?;
+                Ok(json!({"estimate": est, "cached": false}))
+            },
+        ),
         "model.download" => crate::jobs::spawn(
             "model.download",
             "downloading embedding model",
@@ -827,7 +857,7 @@ fn start_job(ctx: &Context, kind: &str, p: &Value) -> Result<crate::jobs::JobInf
             },
         ),
         other => {
-            anyhow::bail!("unknown job kind {other} (scan, hash, analyze, embed, model.download)")
+            anyhow::bail!("unknown job kind {other} (scan, hash, analyze, embed, model.download, shrink.estimate)")
         }
     }
 }

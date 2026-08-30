@@ -155,6 +155,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<RuleCmd>,
     },
+    /// Shrink: reclaim disk space losslessly. Estimate first, rewrite later.
+    Shrink {
+        #[command(subcommand)]
+        cmd: ShrinkCmd,
+    },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -266,6 +271,23 @@ enum SuggestCmd {
         /// Approve without the interactive prompt.
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShrinkCmd {
+    /// Measure how much each Shrink tier could reclaim by sampling and
+    /// compressing a few KB per candidate file. Reads only; writes nothing.
+    Estimate {
+        /// Recompute even if a fresh (< 24 h) estimate is cached.
+        #[arg(long)]
+        refresh: bool,
+        /// Print the full report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Cold projects to list in the archive breakdown.
+        #[arg(long, default_value_t = 10)]
+        projects: usize,
     },
 }
 
@@ -1881,6 +1903,86 @@ fn run() -> Result<()> {
                 println!("  left alone: {}", s.as_str().unwrap_or(""));
             }
         }
+
+        Cmd::Shrink { cmd } => match cmd {
+            ShrinkCmd::Estimate {
+                refresh,
+                json: as_json,
+                projects,
+            } => {
+                let v = rpc(
+                    adapter.as_ref(),
+                    "shrink.estimate",
+                    json!({"refresh": refresh}),
+                )?;
+                if as_json {
+                    println!("{}", serde_json::to_string_pretty(&v["estimate"])?);
+                    return Ok(());
+                }
+                let est: filemind_core::shrink::Estimate =
+                    serde_json::from_value(v["estimate"].clone())?;
+                println!("{}", est.headline());
+                println!(
+                    "  {} files · {} indexed · {} sampled ({}) in {:.1} s{}",
+                    est.files_seen,
+                    human_bytes(est.bytes_seen),
+                    est.sampled_files,
+                    human_bytes(est.sampled_bytes),
+                    est.elapsed_ms as f64 / 1000.0,
+                    if v["cached"].as_bool() == Some(true) {
+                        format!(" · cached {} (--refresh to redo)", fmt_ts(est.computed_ts))
+                    } else {
+                        String::new()
+                    }
+                );
+                for t in &est.tiers {
+                    println!();
+                    println!(
+                        "tier {} · {}  {:>9}  of {} in {} files  (ratio {:.2}{})",
+                        t.tier,
+                        t.label,
+                        human_bytes(t.saving_bytes),
+                        human_bytes(t.candidate_bytes),
+                        t.candidate_files,
+                        t.ratio,
+                        if t.measured { "" } else { ", assumed" }
+                    );
+                    println!("  {}", t.note);
+                    for b in t.buckets.iter().filter(|b| b.files > 0) {
+                        println!(
+                            "  {:<14} {:>9}  of {:>9} in {:>7} files  ratio {:.2}  sampled {}",
+                            b.name,
+                            human_bytes(b.saving_bytes),
+                            human_bytes(b.bytes),
+                            b.files,
+                            b.ratio,
+                            b.sampled_files
+                        );
+                    }
+                    if !t.projects.is_empty() {
+                        println!("  cold projects:");
+                        for pr in t.projects.iter().take(projects) {
+                            println!(
+                                "    {:>9}  of {:>9}  {}  (last touched {}){}",
+                                human_bytes(pr.saving_bytes),
+                                human_bytes(pr.bytes),
+                                pr.name,
+                                fmt_ts(pr.end_ts),
+                                pr.root_path
+                                    .as_deref()
+                                    .map(|r| format!("  {r}"))
+                                    .unwrap_or_default()
+                            );
+                        }
+                        if t.projects.len() > projects {
+                            println!("    … and {} more", t.projects.len() - projects);
+                        }
+                    }
+                }
+                println!();
+                println!("Nothing was changed. Each tier becomes a normal, undoable transaction once it ships.");
+            }
+        },
 
         Cmd::Rule { cmd } => match cmd {
             None => {

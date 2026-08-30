@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod projects;
 pub mod rules;
 pub mod semantic;
+pub mod shrink;
 
 pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use folderdups::FolderDup;

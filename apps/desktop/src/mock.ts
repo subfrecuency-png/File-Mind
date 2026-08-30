@@ -56,8 +56,26 @@ function sleep(ms: number) {
 
 interface MockJob { id: number; kind: string; state: string; label: string; done: number; total: number; started_ms: number; elapsed_ms: number; result: unknown; error: string | null }
 const jobs: MockJob[] = [];
+let shrinkEstimate: Record<string, unknown> | null = null;
+function mockShrinkEstimate() {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    computed_ts: now, elapsed_ms: 4200, files_seen: 188_177, bytes_seen: 54_700_000_000, sampled_files: 310, sampled_bytes: 58_000_000,
+    saving_bytes: 1_600_000_000 + 3_100_000_000 + 12_400_000_000,
+    tiers: [
+      { tier: 1, kind: "apfs", label: "APFS transparent compression", note: "files stay ordinary files; only the on-disk footprint shrinks; reversible in place", measured: true, candidate_files: 41_200, candidate_bytes: 2_300_000_000, ratio: 0.30, saving_bytes: 1_600_000_000,
+        buckets: [{ name: "code", files: 38_000, bytes: 1_900_000_000, ratio: 0.28, saving_bytes: 1_370_000_000, sampled_files: 48, sampled_bytes: 9_000_000 }, { name: "document", files: 3_200, bytes: 400_000_000, ratio: 0.42, saving_bytes: 230_000_000, sampled_files: 48, sampled_bytes: 9_000_000 }] },
+      { tier: 2, kind: "media_lossless", label: "lossless JPEG XL / PNG recompression", note: "typical ratios, not measured yet", measured: false, candidate_files: 58_900, candidate_bytes: 14_000_000_000, ratio: 0.78, saving_bytes: 3_100_000_000,
+        buckets: [{ name: "jpeg", files: 55_000, bytes: 13_000_000_000, ratio: 0.78, saving_bytes: 2_860_000_000, sampled_files: 0, sampled_bytes: 0 }, { name: "png", files: 3_900, bytes: 1_000_000_000, ratio: 0.85, saving_bytes: 150_000_000, sampled_files: 0, sampled_bytes: 0 }] },
+      { tier: 3, kind: "cold_archive", label: "cold-project archives", note: "projects untouched for 180 days packed with zstd -19", measured: true, candidate_files: 12_400, candidate_bytes: 34_000_000_000, ratio: 0.64, saving_bytes: 12_400_000_000,
+        buckets: [{ name: "media", files: 900, bytes: 20_000_000_000, ratio: 0.99, saving_bytes: 200_000_000, sampled_files: 48, sampled_bytes: 9_000_000 }, { name: "code", files: 11_000, bytes: 9_000_000_000, ratio: 0.2, saving_bytes: 7_200_000_000, sampled_files: 48, sampled_bytes: 9_000_000 }, { name: "data", files: 500, bytes: 5_000_000_000, ratio: 0.0, saving_bytes: 5_000_000_000, sampled_files: 48, sampled_bytes: 9_000_000 }],
+        projects: [{ project_id: 7, name: "Lightsaber shots", root_path: `${HOME}/Downloads/lightsaber-shots`, end_ts: now - 200 * 86_400, files: 12_400, bytes: 34_000_000_000, saving_bytes: 12_400_000_000 }] },
+    ],
+  };
+}
+
 function startMockJob(kind: string): MockJob {
-  const total = kind === "model.download" ? 133_000_000 : kind === "analyze" ? 0 : 188_177;
+  const total = kind === "model.download" ? 133_000_000 : kind === "analyze" ? 0 : kind === "shrink.estimate" ? 310 : 188_177;
   const j: MockJob = { id: jobs.length + 1, kind, state: "running", label: kind === "scan" ? `scanning ${HOME}/Downloads` : kind === "model.download" ? "model.onnx" : kind, done: 0, total, started_ms: Date.now(), elapsed_ms: 0, result: null, error: null };
   jobs.push(j);
   const t0 = Date.now();
@@ -68,7 +86,8 @@ function startMockJob(kind: string): MockJob {
       clearInterval(tick);
       j.state = "done";
       j.done = total;
-      j.result = kind === "scan" ? [{ path: `${HOME}/Downloads`, files: 60_211, elapsed_ms: 2900 }] : kind === "analyze" ? { suggestions: suggestions.length, duplicate_groups: 2630 } : kind === "embed" ? { embedded: 4_120, remaining: 0 } : { installed: true };
+      if (kind === "shrink.estimate") shrinkEstimate = mockShrinkEstimate();
+      j.result = kind === "scan" ? [{ path: `${HOME}/Downloads`, files: 60_211, elapsed_ms: 2900 }] : kind === "analyze" ? { suggestions: suggestions.length, duplicate_groups: 2630 } : kind === "embed" ? { embedded: 4_120, remaining: 0 } : kind === "shrink.estimate" ? { estimate: shrinkEstimate, cached: false } : { installed: true };
     }
   }, 200);
   return j;
@@ -139,6 +158,13 @@ export async function mockRpc(method: string, p: Record<string, unknown>): Promi
       if (i >= 0) rules.splice(i, 1);
       return { removed: i >= 0 };
     }
+    case "shrink.estimate":
+      if (p.cached_only && !shrinkEstimate) return { estimate: null, cached: true };
+      if (!shrinkEstimate || p.refresh) {
+        await sleep(600);
+        shrinkEstimate = mockShrinkEstimate();
+      }
+      return { estimate: shrinkEstimate, cached: true };
     case "jobs.start":
       return startMockJob(String(p.kind));
     case "jobs.list":

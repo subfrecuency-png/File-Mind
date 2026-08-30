@@ -20,6 +20,7 @@ pub mod query;
 pub mod rank;
 pub mod rules;
 pub mod scanner;
+pub mod shrink;
 pub mod txn;
 pub mod vectors;
 pub mod versions;

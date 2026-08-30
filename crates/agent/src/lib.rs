@@ -18,5 +18,6 @@ pub mod rpc;
 pub mod rules;
 pub mod scheduler;
 pub mod semantic;
+pub mod shrink;
 pub mod telemetry;
 pub mod watcher;

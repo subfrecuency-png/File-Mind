@@ -16,6 +16,9 @@ interface Health {
 interface Categories { categories: { category: string; files: number; bytes: number }[]; sensitive: number; pending: number }
 interface Embed { model: string; semantic: boolean; vectors: number; embedded: number; pending: number; model_installed: boolean }
 interface Suggest { proposed: number; est_bytes: number }
+interface ShrinkTier { tier: number; kind: string; label: string; measured: boolean; candidate_files: number; candidate_bytes: number; saving_bytes: number; projects?: { name: string; saving_bytes: number }[] }
+interface ShrinkEstimate { computed_ts: number; files_seen: number; sampled_files: number; saving_bytes: number; tiers: ShrinkTier[] }
+interface Shrink { estimate: ShrinkEstimate | null; cached: boolean }
 
 const CAT_COLORS: Record<string, string> = {
   photo: "#5b9cf6", code: "#7c6cf0", document: "#3bbf8a", media: "#f0a64a", design: "#e66aa4", invoice: "#f2c94c",
@@ -47,14 +50,53 @@ function sparkline(points: [number, number][]) {
   return svg;
 }
 
+function shrinkLine(est: ShrinkEstimate): string {
+  const t = (k: string) => est.tiers.find((x) => x.kind === k);
+  const parts: string[] = [];
+  const a = t("apfs");
+  if (a && a.saving_bytes > 0) parts.push(`${bytes(a.saving_bytes)} code/text via APFS`);
+  const m = t("media_lossless");
+  if (m && m.saving_bytes > 0) parts.push(`~${bytes(m.saving_bytes)} photos (lossless)`);
+  const c = t("cold_archive");
+  if (c && c.saving_bytes > 0) parts.push(`${bytes(c.saving_bytes)} in ${num(c.projects?.length ?? 0)} cold project${(c.projects?.length ?? 0) === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : "nothing worth reclaiming right now";
+}
+
+/** "Shrinkable": what lossless compression could reclaim. Measured by sampling; nothing is rewritten. */
+function shrinkTile(est: ShrinkEstimate | null, ctx: AppCtx): HTMLElement {
+  const run = async () => {
+    try {
+      const r = await runJob<Shrink>("shrink.estimate");
+      toast(`Shrink could reclaim ~${bytes(r.estimate?.saving_bytes ?? 0)}`, "ok");
+      ctx.go("home");
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  };
+  return h(
+    "div",
+    { class: "card" },
+    h("h3", null, "Shrinkable"),
+    h("div", { class: "stat" }, est ? bytes(est.saving_bytes) : "—"),
+    h("div", { class: "muted" }, est ? shrinkLine(est) : "measure what lossless compression could reclaim — reads a few KB per file, changes nothing"),
+    h(
+      "div",
+      { style: { marginTop: "12px" }, class: "row" },
+      button(est ? "Re-estimate" : "Estimate", run, { kind: est ? "ghost" : "primary" }),
+      est ? h("span", { class: "muted", style: { fontSize: "12px" } }, `measured ${ago(est.computed_ts)}`) : null,
+    ),
+  );
+}
+
 export async function homeView(main: HTMLElement, ctx: AppCtx) {
   main.append(h("div", { class: "page-head" }, h("h1", null, "Overview")), spinner());
-  const [st, he, cat, emb, sug] = await Promise.all([
+  const [st, he, cat, emb, sug, shr] = await Promise.all([
     rpc<Status>("status"),
     rpc<Health>("health"),
     rpc<Categories>("categories"),
     rpc<Embed>("embed.status").catch(() => null),
     rpc<Suggest>("suggest.list", { limit: 0 }),
+    rpc<Shrink>("shrink.estimate", { cached_only: true }).catch(() => null),
   ]);
   clear(main);
 
@@ -105,7 +147,7 @@ export async function homeView(main: HTMLElement, ctx: AppCtx) {
     h("div", { class: "page-head" }, h("h1", null, "Overview"), h("span", { class: "sub" }, `${num(st.files)} files · ${bytes(st.bytes)} across ${st.roots.length} folder${st.roots.length === 1 ? "" : "s"}`), h("span", { class: "spacer" }), actions),
     h(
       "div",
-      { class: "grid cols-3" },
+      { class: "grid cols-4" },
       h(
         "div",
         { class: "card" },
@@ -121,6 +163,7 @@ export async function homeView(main: HTMLElement, ctx: AppCtx) {
         h("div", { class: "muted" }, `${num(sug.proposed)} suggestions waiting for your approval`),
         h("div", { style: { marginTop: "12px" } }, button("Review approvals", () => ctx.go("approvals"), { kind: "primary" })),
       ),
+      shrinkTile(shr?.estimate ?? null, ctx),
       h(
         "div",
         { class: "card" },
