@@ -195,9 +195,6 @@ pub fn embed_pending(db: &Db, engine: &Engine, opts: EmbedOpts) -> Result<EmbedO
             out.embedded += rows.len() as u64;
         }
         busy += t.elapsed();
-        if cands.len() < opts.batch {
-            break;
-        }
         let target_wall = busy.mul_f32(1.0 / duty);
         let wall = started.elapsed();
         if target_wall > wall {
@@ -309,8 +306,14 @@ fn search_parsed(
             let ix = engine.index.read().unwrap();
             let hits = ix.search(&qv, CANDIDATES);
             drop(ix);
-            // semantic scores below this are noise for bge; the hash fallback is flat, so keep all
-            let floor = if engine.is_semantic() { 0.45 } else { 0.0 };
+            // bge scores unrelated text around 0.4–0.6 and a real match 0.65+,
+            // so cut relative to the best hit; the hash fallback is flat, keep all
+            let top = hits.first().map(|h| h.score).unwrap_or(0.0);
+            let floor = if engine.is_semantic() {
+                (top - 0.10).max(0.5)
+            } else {
+                0.0
+            };
             let mut ids = Vec::with_capacity(hits.len());
             for h in hits {
                 if h.score < floor {
@@ -324,7 +327,15 @@ fn search_parsed(
                     ids.push(h.id);
                 }
             }
-            let weight = if engine.is_semantic() { 1.0 } else { 0.6 };
+            // a weak best match (a question about something not indexed) should
+            // not outvote exact words
+            let weight = if !engine.is_semantic() {
+                0.6
+            } else if top < 0.58 {
+                0.5
+            } else {
+                1.0
+            };
             lists.push(("semantic", weight, ids));
         }
     }

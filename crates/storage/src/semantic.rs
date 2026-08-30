@@ -13,6 +13,20 @@ use std::path::PathBuf;
 /// How much extracted text is kept per file for embedding.
 pub const TEXT_HEAD_BYTES: usize = 2048;
 
+/// `AND …` clause excluding noise directories (mirrors
+/// `core::scanner::in_noise_dir`) and hidden files, which carry no meaning
+/// worth a vector (.DS_Store, .transfer/…).
+fn embeddable_clause() -> String {
+    let mut sql = String::from(" AND f.name NOT LIKE '.%' AND f.path NOT LIKE '%/.%/%'");
+    for d in filemind_core::scanner::NOISE_DIRS {
+        if d.starts_with('.') {
+            continue; // already covered by the hidden-component rule
+        }
+        sql.push_str(&format!(" AND f.path NOT LIKE '%/{d}/%'"));
+    }
+    sql
+}
+
 /// A subject that needs (re)embedding.
 #[derive(Debug, Clone)]
 pub struct EmbedCandidate {
@@ -68,7 +82,7 @@ impl Db {
     /// Files that have no vector under `model`, or changed since it was made.
     /// Sensitive files are never embedded (their text never leaves the file).
     pub fn embed_candidates(&self, model: &str, limit: usize) -> Result<Vec<EmbedCandidate>> {
-        let mut st = self.conn.prepare(
+        let sql = format!(
             "SELECT f.file_id, f.path, f.name, f.size, f.mtime, c.category, t.head
              FROM files f
              LEFT JOIN embeddings e ON e.subject = f.file_id AND e.model = ?1
@@ -76,9 +90,11 @@ impl Db {
              LEFT JOIN file_text t ON t.file_id = f.file_id
              WHERE f.status = 'present' AND f.kind = 'file' AND f.sensitive = 0
                AND f.classified_mtime IS NOT NULL
-               AND (e.subject IS NULL OR e.ts < f.mtime)
+               AND (e.subject IS NULL OR e.ts < f.mtime){}
              ORDER BY f.mtime DESC LIMIT ?2",
-        )?;
+            embeddable_clause()
+        );
+        let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map(params![model, limit as i64], |r| {
             Ok(EmbedCandidate {
                 subject: r.get(0)?,
@@ -90,26 +106,18 @@ impl Db {
                 head: r.get(6)?,
             })
         })?;
-        let mut out = Vec::new();
-        for r in rows {
-            let c = r?;
-            if filemind_core::scanner::in_noise_dir(&c.path) {
-                continue;
-            }
-            out.push(c);
-        }
-        Ok(out)
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn count_embed_pending(&self, model: &str) -> Result<u64> {
-        Ok(self.conn.query_row(
+        let sql = format!(
             "SELECT COUNT(*) FROM files f
              LEFT JOIN embeddings e ON e.subject = f.file_id AND e.model = ?1
              WHERE f.status = 'present' AND f.kind = 'file' AND f.sensitive = 0
-               AND f.classified_mtime IS NOT NULL AND (e.subject IS NULL OR e.ts < f.mtime)",
-            [model],
-            |r| r.get::<_, i64>(0),
-        )? as u64)
+               AND f.classified_mtime IS NOT NULL AND (e.subject IS NULL OR e.ts < f.mtime){}",
+            embeddable_clause()
+        );
+        Ok(self.conn.query_row(&sql, [model], |r| r.get::<_, i64>(0))? as u64)
     }
 
     pub fn put_text_head(&self, file_id: &str, mtime: i64, head: &str) -> Result<()> {
@@ -187,9 +195,17 @@ impl Db {
         Ok(ix)
     }
 
-    /// Remove vectors for files that are no longer present or notes that are gone.
+    /// Remove vectors for files that are no longer present, files that should
+    /// never have been embedded (noise/hidden), or notes that are gone.
     pub fn prune_embeddings(&self) -> Result<usize> {
-        let n = self.conn.execute(
+        let junk = format!(
+            "DELETE FROM embeddings WHERE subject IN (
+               SELECT e.subject FROM embeddings e JOIN files f ON f.file_id = e.subject
+               WHERE NOT (1=1{}))",
+            embeddable_clause()
+        );
+        let mut n = self.conn.execute(&junk, [])?;
+        n += self.conn.execute(
             "DELETE FROM embeddings WHERE subject IN (
                SELECT e.subject FROM embeddings e LEFT JOIN files f ON f.file_id = e.subject
                WHERE e.subject NOT LIKE 'note:%' AND (f.file_id IS NULL OR f.status <> 'present'))
