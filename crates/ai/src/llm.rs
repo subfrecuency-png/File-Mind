@@ -33,7 +33,7 @@ impl Default for Config {
             adapter: Kind::None,
             ollama_url: "http://127.0.0.1:11434".into(),
             ollama_model: "llama3.2".into(),
-            cloud_model: "claude-3-5-haiku-latest".into(),
+            cloud_model: "claude-opus-5".into(),
             cloud_key: String::new(),
         }
     }
