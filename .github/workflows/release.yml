@@ -1,0 +1,81 @@
+name: Release
+
+# Tag a commit `v0.2.0` (matching apps/desktop/src-tauri/tauri.conf.json and
+# the workspace version) and this builds the sidecars + app on macOS, signs
+# and notarizes the .dmg, and publishes a GitHub Release with the updater
+# manifest (`latest.json`) the app's "Check for updates" reads.
+#
+# Repository secrets required:
+#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD   its password
+#   APPLE_SIGNING_IDENTITY       "Developer ID Application: Ryan Rodriguez (TEAMID)"
+#   APPLE_ID / APPLE_PASSWORD    Apple ID + app-specific password (notarization)
+#   APPLE_TEAM_ID
+#   TAURI_SIGNING_PRIVATE_KEY    from `tauri signer generate -w ~/.tauri/filemind.key`
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# The matching public key goes into tauri.conf.json → plugins.updater.pubkey.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build, sign, notarize (${{ matrix.target }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            apps/desktop/src-tauri
+
+      - name: Sidecars (agent + CLI)
+        run: TARGET=${{ matrix.target }} sh scripts/build-sidecar.sh --release
+
+      - run: npm ci
+        working-directory: apps/desktop
+
+      # tauri-action imports the certificate into a temporary keychain, runs
+      # `tauri build`, signs + notarizes the bundle, signs the updater
+      # artifact with the minisign key and uploads everything to the release.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: FileMind ${{ github.ref_name }}
+          releaseBody: See CHANGELOG.md.
+          releaseDraft: true
+          prerelease: true
+          # the sidecar build above already targets this triple; pass it on
+          args: --target ${{ matrix.target }}
+          updaterJsonPreferNsis: false

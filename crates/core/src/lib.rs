@@ -18,6 +18,7 @@ pub mod model;
 pub mod projects;
 pub mod query;
 pub mod rank;
+pub mod rules;
 pub mod scanner;
 pub mod txn;
 pub mod vectors;

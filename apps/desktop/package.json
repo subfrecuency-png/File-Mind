@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "sidecar": "sh ../../scripts/build-sidecar.sh",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -197,6 +197,143 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 "model_installed": filemind_ai::embed::BGE_SMALL.is_installed(),
             }))
         }
+        // ---- background jobs (Phase 9): long work off the caller's thread ----
+        "jobs.start" => {
+            let kind = p
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("kind required"))?
+                .to_string();
+            drop(db);
+            let info = start_job(ctx, &kind, p)?;
+            Ok(crate::jobs::info_json(&info))
+        }
+        "jobs.list" => Ok(json!(crate::jobs::list()
+            .iter()
+            .map(crate::jobs::info_json)
+            .collect::<Vec<_>>())),
+        "jobs.status" => {
+            let id = p.get("id").and_then(Value::as_u64);
+            let job = match id {
+                Some(id) => crate::jobs::get(id),
+                None => crate::jobs::running().or_else(|| crate::jobs::list().pop()),
+            };
+            Ok(job
+                .map(|j| crate::jobs::info_json(&j))
+                .unwrap_or(Value::Null))
+        }
+        // ---- Automate mode (Phase 9) --------------------------------------
+        "automate.kinds" => Ok(json!(filemind_core::rules::KINDS
+            .iter()
+            .map(|k| {
+                let d = filemind_core::rules::RuleKind::defaults(k).expect("listed kind");
+                json!({"kind": k, "defaults": d.params(), "describe": d.describe()})
+            })
+            .collect::<Vec<_>>())),
+        "automate.list" => {
+            let window = crate::rules::preview_days(&db).max(1);
+            let mut out = Vec::new();
+            for r in db.list_automations()? {
+                let w = crate::rules::would_have(&db, &r, window)?;
+                let describe = filemind_core::rules::RuleKind::parse(&r.kind, &r.params)
+                    .map(|k| k.describe())
+                    .unwrap_or_else(|e| format!("invalid: {e}"));
+                out.push(json!({"rule": r, "describe": describe, "would_have": w}));
+            }
+            Ok(
+                json!({"mode": crate::rules::current_mode(&db), "preview_days": window, "rules": out}),
+            )
+        }
+        "automate.add" => {
+            let kind = p
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("kind required"))?;
+            let params = p.get("params").cloned().unwrap_or(json!({}));
+            let r = crate::rules::add(&db, kind, &params)?;
+            // evaluate right away so the screen has something to show
+            let (m, eval) = crate::rules::plan(ctx.adapter.as_ref(), &db, &r)?;
+            db.record_automation_run(
+                r.rule_id,
+                true,
+                None,
+                &serde_json::to_value(&m)?,
+                &json!({"candidates": eval.candidates, "candidate_bytes": eval.candidate_bytes, "files": eval.steps, "bytes": eval.bytes, "capped": eval.capped, "problems": eval.problems}),
+            )?;
+            Ok(json!({"rule": r, "evaluation": eval}))
+        }
+        "automate.preview" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let r = db
+                .get_automation(id)?
+                .ok_or_else(|| anyhow::anyhow!("no rule #{id}"))?;
+            let (m, eval) = crate::rules::plan(ctx.adapter.as_ref(), &db, &r)?;
+            let window = crate::rules::preview_days(&db).max(1);
+            let w = crate::rules::would_have(&db, &r, window)?;
+            Ok(json!({"rule": r, "now": eval, "steps": m.steps, "keeps": m.keeps, "would_have": w}))
+        }
+        "automate.runs" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+            Ok(json!(db.list_automation_runs(id, 0, limit)?))
+        }
+        "automate.arm" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!(crate::rules::arm(&db, id)?))
+        }
+        "automate.pause" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let reason = p
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("paused by user");
+            Ok(json!({"paused": db.pause_automation(id, reason)?}))
+        }
+        "automate.unarm" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!({"preview": db.unarm_automation(id)?}))
+        }
+        "automate.remove" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            Ok(json!({"removed": db.remove_automation(id)?}))
+        }
+        "automate.set_params" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let r = db
+                .get_automation(id)?
+                .ok_or_else(|| anyhow::anyhow!("no rule #{id}"))?;
+            let params = p.get("params").cloned().unwrap_or(json!({}));
+            let k = filemind_core::rules::RuleKind::parse(&r.kind, &params)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            db.set_automation_params(id, &k.params())?;
+            Ok(json!(db.get_automation(id)?))
+        }
+        "automate.tick" => {
+            // evaluate (and, for armed rules in automate mode, run) right now
+            let _slot = crate::jobs::heavy();
+            Ok(json!(crate::rules::tick(ctx.adapter.as_ref(), &db)?))
+        }
         "notes.add" => {
             let subject = p
                 .get("subject")
@@ -525,6 +662,134 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
 }
 
 #[cfg(unix)]
+/// Spawn one of the long-running passes as a background job. Each job opens
+/// its own database connection so the RPC connection stays free for status
+/// calls; the engine and adapter are shared through their `Arc`s.
+fn start_job(ctx: &Context, kind: &str, p: &Value) -> Result<crate::jobs::JobInfo> {
+    let adapter = ctx.adapter.clone();
+    let engine = ctx.engine.clone();
+    let db_path = ctx.db_path.clone();
+    let p = p.clone();
+    match kind {
+        "scan" => {
+            let path = p.get("path").and_then(Value::as_str).map(PathBuf::from);
+            crate::jobs::spawn("scan", "scanning", move |prog| {
+                let db = Db::open(&db_path)?;
+                let targets: Vec<PathBuf> = match path {
+                    Some(s) => vec![s.canonicalize()?],
+                    None => db.list_roots()?.into_iter().map(|r| r.path).collect(),
+                };
+                let total = targets.len() as u64;
+                let mut out = Vec::new();
+                for (i, t) in targets.iter().enumerate() {
+                    prog.set(&format!("scanning {}", t.display()), i as u64, total);
+                    let o = pipeline::scan_root(adapter.as_ref(), &db, t)?;
+                    out.push(json!({
+                        "path": t, "files": o.report.files, "dirs": o.report.dirs, "bytes": o.report.bytes,
+                        "new": o.upsert.inserted, "modified": o.upsert.updated, "renamed": o.upsert.renamed,
+                        "moved": o.upsert.moved, "missing": o.missing, "unchanged": o.upsert.unchanged,
+                        "links": o.report.links_skipped, "ignored": o.report.ignored, "errors": o.report.errors,
+                        "elapsed_ms": o.elapsed_ms
+                    }));
+                }
+                prog.set("scanned", total, total);
+                Ok(json!(out))
+            })
+        }
+        "hash" => {
+            let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
+            let minutes = p.get("minutes").and_then(Value::as_u64).unwrap_or(10);
+            crate::jobs::spawn("hash", "hashing", move |prog| {
+                let db = Db::open(&db_path)?;
+                let deadline = Instant::now() + Duration::from_secs(minutes * 60);
+                let mut total = pipeline::HashOutcome::default();
+                loop {
+                    let o = pipeline::hash_pending(
+                        &db,
+                        HashOpts {
+                            duty_cycle: duty,
+                            max_files: 0,
+                            max_wall: Some(Duration::from_secs(15)),
+                        },
+                    )?;
+                    total.hashed += o.hashed;
+                    total.bytes += o.bytes;
+                    total.errors += o.errors;
+                    total.remaining = o.remaining;
+                    prog.set("hashing", total.hashed, total.hashed + o.remaining);
+                    if o.remaining == 0 || Instant::now() >= deadline {
+                        break;
+                    }
+                }
+                Ok(
+                    json!({"hashed": total.hashed, "bytes": total.bytes, "errors": total.errors, "remaining": total.remaining}),
+                )
+            })
+        }
+        "analyze" => crate::jobs::spawn(
+            "analyze",
+            "finding duplicates, versions and projects",
+            move |_| {
+                let db = Db::open(&db_path)?;
+                let a = crate::analysis::run(&db)?;
+                Ok(json!({
+                    "duplicate_groups": a.duplicate_groups, "duplicate_bytes": a.duplicate_bytes,
+                    "version_chains": a.version_chains, "suggestions": a.suggestions, "projects": a.projects,
+                    "health": a.health, "elapsed_ms": a.elapsed_ms
+                }))
+            },
+        ),
+        "embed" => {
+            let duty = p.get("duty").and_then(Value::as_f64).unwrap_or(0.2) as f32;
+            let minutes = p.get("minutes").and_then(Value::as_u64).unwrap_or(30);
+            crate::jobs::spawn("embed", "embedding", move |prog| {
+                let db = Db::open(&db_path)?;
+                let deadline = Instant::now() + Duration::from_secs(minutes * 60);
+                let mut embedded = 0u64;
+                let mut remaining;
+                loop {
+                    let o = crate::semantic::embed_pending(
+                        &db,
+                        &engine,
+                        crate::semantic::EmbedOpts {
+                            duty_cycle: duty,
+                            max_wall: Some(Duration::from_secs(15)),
+                            ..Default::default()
+                        },
+                    )?;
+                    embedded += o.embedded;
+                    remaining = o.remaining;
+                    prog.set("embedding", embedded, embedded + remaining);
+                    if remaining == 0 || Instant::now() >= deadline || o.embedded == 0 {
+                        break;
+                    }
+                }
+                Ok(
+                    json!({"embedded": embedded, "remaining": remaining, "semantic": engine.is_semantic()}),
+                )
+            })
+        }
+        "model.download" => crate::jobs::spawn(
+            "model.download",
+            "downloading embedding model",
+            move |prog| {
+                let spec = filemind_ai::embed::BGE_SMALL;
+                let mut last = 0u64;
+                let dir = spec.download(&mut |name, got, total| {
+                    if got.saturating_sub(last) > (1 << 20) || got == total {
+                        last = got;
+                        prog.set(name, got, total);
+                    }
+                })?;
+                Ok(json!({"installed": true, "dir": dir, "model": spec.id, "restart_agent": true}))
+            },
+        ),
+        other => {
+            anyhow::bail!("unknown job kind {other} (scan, hash, analyze, embed, model.download)")
+        }
+    }
+}
+
 pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use std::os::unix::net::UnixListener;
     let sock = socket_path(&ctx.db_path);

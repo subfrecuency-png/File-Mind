@@ -160,6 +160,8 @@ The heart of "Protect".
 
 Mode is global with per-root overrides. Every rule has a written rationale and risk tier; only tier-0 rules are eligible for Automate.
 
+*As built in Phase 9*: the allow-list is code, not configuration — `core::rules::KINDS` = `archive_stale_downloads`, `collapse_versions`, `trash_exact_duplicates`, each with validated, bounded parameters (per-run cap ≤ 500, minimum ages, "keeper outside Downloads"). A rule is created in **preview**; every scheduler tick records a dry run (`rule_runs.dry_run = 1`, the manifest it would have executed) and the Automate screen / `filemind rule` shows "in the last 7 days this rule would have moved N files". **Arm** is accepted only after `automate.preview_days` (default 7) *and* at least one dry run; an armed rule executes only while the mode is Automate, as a normal journaled transaction with `Initiator::Rule` (undo works like any other). Any validation problem, failed step, or plan above `pause_above` **pauses** the rule with the reason; arming again is a deliberate act. The brief's "never trash" for tier 0 became "trash only exact copies whose keeper is verified present" — the safest kind of trash there is, and still reversible.
+
 ---
 
 ## 5. Data model (SQLite)
@@ -192,9 +194,9 @@ settings(key PK, value JSON)
 
 - All indexing, hashing, embedding and classification run locally; the agent makes **zero network calls** unless an adapter or update check is enabled.
 - Cloud adapter payload policy: filename + ≤ 2 KB snippet, never full files, never paths outside approved roots; every call is logged in `settings.ai_audit` and viewable in the GUI.
-- Database encrypted at rest with SQLCipher (key in Keychain / DPAPI) — Phase 8.
+- Database encrypted at rest with SQLCipher (key in Keychain / DPAPI) — *as built in Phase 9.5*: `filemind-storage` feature `encrypt` (on for macOS/Linux builds), raw 32-byte key in the login Keychain (`ai.filemind` / `db-key`, `security-framework`) for the real database and a 0600 key file for any other path (tests, copies); a plaintext database is converted once on open via `sqlcipher_export`, the plaintext copy kept as `filemind.db.pre-sqlcipher` until a later process opens the encrypted file, then moved to the Trash. `filemind dev db-key` prints the key for the `sqlcipher` shell; `FILEMIND_DB_KEY` overrides, `FILEMIND_PLAINTEXT_DB=1` opts out. Windows stays plaintext until its OpenSSL build is sorted out.
 - Sensitive-content detector (rule-based: SSN/card patterns, `.env`, keys) marks files `sensitive=true`, which excludes them from any adapter call and from text preview.
-- Code signing + notarization (macOS) and Authenticode (Windows) from the first beta; auto-update via Tauri updater with signed manifests.
+- Code signing + notarization (macOS) and Authenticode (Windows) from the first beta; auto-update via Tauri updater with signed manifests. *As built in Phase 9*: `.github/workflows/release.yml` (tag `v*`, both Apple targets, Developer ID + notarization via `tauri-action`, minisign-signed `latest.json`); `tauri-plugin-updater` behind Settings → Updates. The agent and the CLI ship as Tauri sidecars in `FileMind.app/Contents/MacOS/` (`scripts/build-sidecar.sh`, ORT linked statically); launchd "Start at login" is written by the app and re-pointed on every launch; the agent exits cleanly on SIGTERM.
 
 ## 7. Core safety rules → enforcement points
 

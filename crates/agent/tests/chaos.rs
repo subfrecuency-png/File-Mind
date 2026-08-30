@@ -108,8 +108,10 @@ fn crash_at_every_point_loses_nothing_and_undo_restores() {
             assert!(problems.is_empty(), "{problems:?}");
 
             let res = txn::execute(&adapter, &db, &mut m, cp);
+            // freedesktop Trash on Linux, ~/.Trash on macOS — both under the fake HOME
             let trash = home.join(".local/share/Trash");
-            let roots: Vec<&Path> = vec![&dir, &trash];
+            let mac_trash = home.join(".Trash");
+            let roots: Vec<&Path> = vec![&dir, &trash, &mac_trash];
             match cp {
                 CrashPoint::Never => assert!(res.is_ok()),
                 _ => assert!(res.is_err(), "crash point {cp:?} should interrupt"),

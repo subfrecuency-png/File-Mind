@@ -150,6 +150,11 @@ enum Cmd {
     },
     /// Reverse a transaction. Files edited after the move are left alone and reported.
     Undo { txn_id: String },
+    /// Automate-mode rules: tier-0 actions that run unattended after a preview week.
+    Rule {
+        #[command(subcommand)]
+        cmd: Option<RuleCmd>,
+    },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -265,6 +270,32 @@ enum SuggestCmd {
 }
 
 #[derive(Subcommand)]
+enum RuleCmd {
+    /// The allow-listed rule kinds and their default parameters.
+    Kinds,
+    /// Create a rule in preview state. `--set key=value` overrides a default.
+    Add {
+        /// archive_stale_downloads | collapse_versions | trash_exact_duplicates
+        kind: String,
+        /// e.g. --set older_than_days=120 --set max_items_per_run=20
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
+    },
+    /// What the rule would do right now, and what it would have done during the preview.
+    Preview { id: i64 },
+    /// Arm a rule once it has previewed for the required days. It runs only in automate mode.
+    Arm { id: i64 },
+    /// Pause a rule (it keeps previewing nothing; arm it again to resume).
+    Pause { id: i64 },
+    /// Remove a rule and its run log. No file is touched.
+    Rm { id: i64 },
+    /// The rule's run log (dry runs and real transactions).
+    Runs { id: i64 },
+    /// Evaluate every rule now (and run armed ones if the mode is automate).
+    Tick,
+}
+
+#[derive(Subcommand)]
 enum AgentCmd {
     /// Register filemind-agent to start at login (launchd / Task Scheduler).
     Install,
@@ -288,6 +319,9 @@ enum DevCmd {
         #[arg(long, default_value_t = 10_000)]
         entries: usize,
     },
+    /// Print the database encryption key (hex) so `sqlcipher` can open the file:
+    /// sqlcipher filemind.db  then  PRAGMA key = "x'<hex>'";
+    DbKey,
 }
 
 fn parse_mode(s: &str) -> Result<Mode, String> {
@@ -320,6 +354,90 @@ fn agent() -> Option<Client> {
             Some(c)
         }
         Err(_) => None,
+    }
+}
+
+/// Call a method on the running agent, or handle it in-process against the
+/// database exactly as the agent would (same handler, same code).
+fn rpc(adapter: &dyn filemind_core::OsAdapter, method: &str, params: Value) -> Result<Value> {
+    if let Some(mut a) = agent() {
+        return a.call(method, params);
+    }
+    let _ = adapter; // the in-process context builds its own (same platform)
+    let adapter: std::sync::Arc<dyn filemind_core::OsAdapter> =
+        std::sync::Arc::from(platform::adapter());
+    let (db_path, db) = open_db()?;
+    let _ = filemind_agent::actions::recover_all(adapter.as_ref(), &db);
+    let engine = filemind_agent::semantic::Engine::open(&db)?;
+    let ctx = filemind_agent::rpc::Context {
+        adapter: adapter.clone(),
+        db_path,
+        db: std::sync::Mutex::new(db),
+        engine: std::sync::Arc::new(engine),
+        stats: std::sync::Arc::new(filemind_agent::watcher::WatchStats::default()),
+        started: std::time::Instant::now(),
+    };
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    let resp = filemind_agent::rpc::handle(&ctx, &req);
+    if let Some(e) = resp.get("error") {
+        bail!("{}", e["message"].as_str().unwrap_or("rpc error"));
+    }
+    Ok(resp.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn print_rule(r: &Value, describe: &str, w: &Value) {
+    let rule = r;
+    let state = rule["state"].as_str().unwrap_or("?");
+    println!(
+        "  #{:<4} {:<8} {:<24} {}",
+        rule["rule_id"],
+        state,
+        rule["kind"].as_str().unwrap_or("?"),
+        describe
+    );
+    if !w.is_null() {
+        println!(
+            "        preview: would have touched {} file{} ({}) over {} dry run{}{}",
+            w["files"].as_array().map(|a| a.len()).unwrap_or(0),
+            if w["files"].as_array().map(|a| a.len()).unwrap_or(0) == 1 {
+                ""
+            } else {
+                "s"
+            },
+            human_bytes(w["bytes"].as_u64().unwrap_or(0)),
+            w["dry_runs"],
+            if w["dry_runs"].as_u64() == Some(1) {
+                ""
+            } else {
+                "s"
+            },
+            if w["real_runs"].as_u64().unwrap_or(0) > 0 {
+                format!(", {} real run(s)", w["real_runs"])
+            } else {
+                String::new()
+            }
+        );
+        if state == "preview" || state == "paused" {
+            if w["armable"].as_bool() == Some(true) {
+                println!(
+                    "        ready to arm: `filemind rule arm {}`",
+                    rule["rule_id"]
+                );
+            } else {
+                println!(
+                    "        not armable yet: {}",
+                    w["armable_reason"].as_str().unwrap_or("")
+                );
+            }
+        }
+        if let Some(p) = w["last_problems"].as_array().filter(|a| !a.is_empty()) {
+            for x in p {
+                println!("        ! {}", x.as_str().unwrap_or(""));
+            }
+        }
+    }
+    if let Some(why) = rule["paused_reason"].as_str() {
+        println!("        paused: {why}");
     }
 }
 
@@ -441,6 +559,13 @@ fn human_bytes(b: u64) -> String {
 
 fn main() {
     filemind_core::install_quiet_panic_hook();
+    // `filemind search … | head` closes our stdout early; the default Rust
+    // behaviour is a `println!` panic on EPIPE. Restore SIGPIPE's default
+    // disposition so the process simply ends, like every other CLI tool.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -1750,6 +1875,218 @@ fn run() -> Result<()> {
             }
         }
 
+        Cmd::Rule { cmd } => match cmd {
+            None => {
+                let v = rpc(adapter.as_ref(), "automate.list", json!({}))?;
+                let rules = v["rules"].as_array().cloned().unwrap_or_default();
+                println!(
+                    "mode {}  ·  {} rule{}  ·  preview period {} days",
+                    v["mode"].as_str().unwrap_or("?"),
+                    rules.len(),
+                    if rules.len() == 1 { "" } else { "s" },
+                    v["preview_days"]
+                );
+                if v["mode"].as_str() != Some("automate") {
+                    println!(
+                        "(armed rules only execute in automate mode: `filemind mode automate`)"
+                    );
+                }
+                for r in &rules {
+                    println!();
+                    print_rule(
+                        &r["rule"],
+                        r["describe"].as_str().unwrap_or(""),
+                        &r["would_have"],
+                    );
+                }
+                if rules.is_empty() {
+                    println!("  (none — `filemind rule kinds`, then `filemind rule add <kind>`)");
+                }
+            }
+            Some(RuleCmd::Kinds) => {
+                for k in rpc(adapter.as_ref(), "automate.kinds", json!({}))?
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    println!("{}", k["kind"].as_str().unwrap_or("?"));
+                    println!("    {}", k["describe"].as_str().unwrap_or(""));
+                    println!("    defaults: {}", k["defaults"]);
+                }
+            }
+            Some(RuleCmd::Add { kind, set }) => {
+                let mut params = serde_json::Map::new();
+                for kv in set {
+                    let (k, v) = kv
+                        .split_once('=')
+                        .ok_or_else(|| anyhow::anyhow!("--set wants KEY=VALUE, got {kv:?}"))?;
+                    let v: Value = serde_json::from_str(v).unwrap_or(Value::String(v.to_string()));
+                    params.insert(k.to_string(), v);
+                }
+                let v = rpc(
+                    adapter.as_ref(),
+                    "automate.add",
+                    json!({"kind": kind, "params": params}),
+                )?;
+                let r = &v["rule"];
+                println!("rule #{} created in preview state ({} days). It will run nothing until you arm it.", r["rule_id"], rpc(adapter.as_ref(), "automate.list", json!({}))?["preview_days"]);
+                println!("params: {}", r["params"]);
+                let e = &v["evaluation"];
+                println!(
+                    "right now it would touch {} file{} ({}){}",
+                    e["steps"],
+                    if e["steps"].as_u64() == Some(1) {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    human_bytes(e["bytes"].as_u64().unwrap_or(0)),
+                    if e["capped"].as_bool() == Some(true) {
+                        format!(" — {} qualify, capped per run", e["candidates"])
+                    } else {
+                        String::new()
+                    }
+                );
+                if let Some(d) = e["diff"].as_str().filter(|d| !d.trim().is_empty()) {
+                    println!("{d}");
+                }
+            }
+            Some(RuleCmd::Preview { id }) => {
+                let v = rpc(adapter.as_ref(), "automate.preview", json!({"id": id}))?;
+                print_rule(&v["rule"], "", &v["would_have"]);
+                let e = &v["now"];
+                println!();
+                println!(
+                    "right now: {} file{} ({}){}",
+                    e["steps"],
+                    if e["steps"].as_u64() == Some(1) {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    human_bytes(e["bytes"].as_u64().unwrap_or(0)),
+                    if e["capped"].as_bool() == Some(true) {
+                        format!(" — {} qualify, capped per run", e["candidates"])
+                    } else {
+                        String::new()
+                    }
+                );
+                for k in v["keeps"].as_array().cloned().unwrap_or_default() {
+                    println!("  KEEP   {}", k.as_str().unwrap_or(""));
+                }
+                if let Some(d) = e["diff"].as_str().filter(|d| !d.trim().is_empty()) {
+                    println!("{d}");
+                }
+                for p in e["problems"].as_array().cloned().unwrap_or_default() {
+                    println!("  ! {}", p.as_str().unwrap_or(""));
+                }
+                let w = &v["would_have"];
+                if let Some(files) = w["files"].as_array().filter(|f| !f.is_empty()) {
+                    println!();
+                    println!("during the preview it would have touched:");
+                    for f in files.iter().take(200) {
+                        println!("  {}", f.as_str().unwrap_or(""));
+                    }
+                    if files.len() > 200 {
+                        println!("  … and {} more", files.len() - 200);
+                    }
+                }
+            }
+            Some(RuleCmd::Arm { id }) => {
+                let v = rpc(adapter.as_ref(), "automate.arm", json!({"id": id}))?;
+                println!("rule #{} armed. It executes on the agent's schedule while the mode is automate; every run is in `filemind history` and undoable.", v["rule_id"]);
+            }
+            Some(RuleCmd::Pause { id }) => {
+                rpc(
+                    adapter.as_ref(),
+                    "automate.pause",
+                    json!({"id": id, "reason": "paused by user"}),
+                )?;
+                println!("rule #{id} paused");
+            }
+            Some(RuleCmd::Rm { id }) => {
+                let v = rpc(adapter.as_ref(), "automate.remove", json!({"id": id}))?;
+                println!(
+                    "{}",
+                    if v["removed"].as_bool() == Some(true) {
+                        "removed"
+                    } else {
+                        "no such rule"
+                    }
+                );
+            }
+            Some(RuleCmd::Runs { id }) => {
+                for r in rpc(
+                    adapter.as_ref(),
+                    "automate.runs",
+                    json!({"id": id, "limit": 50}),
+                )?
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                {
+                    let s = &r["summary"];
+                    println!(
+                        "{}  {:<7}  {} file{} ({}){}{}",
+                        chrono::DateTime::from_timestamp(r["ts"].as_i64().unwrap_or(0), 0)
+                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_default(),
+                        if r["dry_run"].as_bool() == Some(true) {
+                            "dry"
+                        } else {
+                            "RAN"
+                        },
+                        s["files"],
+                        if s["files"].as_u64() == Some(1) {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        human_bytes(s["bytes"].as_u64().unwrap_or(0)),
+                        r["txn_id"]
+                            .as_str()
+                            .map(|t| format!("  {t}"))
+                            .unwrap_or_default(),
+                        s["problems"]
+                            .as_array()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| format!("  ! {}", p.len()))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            Some(RuleCmd::Tick) => {
+                for o in rpc(adapter.as_ref(), "automate.tick", json!({}))?
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    println!(
+                        "rule #{}: {} {} file{}{}{}",
+                        o["rule_id"],
+                        if o["dry_run"].as_bool() == Some(true) {
+                            "would touch"
+                        } else {
+                            "ran on"
+                        },
+                        o["files"],
+                        if o["files"].as_u64() == Some(1) {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        o["txn_id"]
+                            .as_str()
+                            .map(|t| format!("  ({t})"))
+                            .unwrap_or_default(),
+                        o["paused"]
+                            .as_str()
+                            .map(|p| format!("  PAUSED: {p}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        },
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Start => {
                 if agent().is_some() {
@@ -1815,6 +2152,15 @@ fn run() -> Result<()> {
                     s.duplicates,
                     s.version_chains,
                     s.links
+                );
+            }
+            DevCmd::DbKey => {
+                let path = filemind_storage::default_db_path()?;
+                let dir = path.parent().unwrap_or(std::path::Path::new("."));
+                println!("{}", filemind_storage::keyring::db_key_hex(dir)?);
+                eprintln!(
+                    "open with:  sqlcipher '{}'  then  PRAGMA key = \"x'<hex>'\";",
+                    path.display()
                 );
             }
         },

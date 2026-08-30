@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const STALE_DAYS: i64 = 90;
+/// A folder needs this many files before an identical twin is worth a suggestion.
+const FOLDER_DUP_MIN_FILES: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct DupGroup {
@@ -311,6 +313,18 @@ impl Db {
     /// Existing rows keep their state (a dismissed suggestion stays dismissed);
     /// rows whose key no longer exists are marked stale.
     pub fn refresh_suggestions(&self, dups: &[DupGroup], chains: &[VersionChain]) -> Result<usize> {
+        let folders = self
+            .folder_duplicates(FOLDER_DUP_MIN_FILES)
+            .unwrap_or_default();
+        self.refresh_suggestions_with(dups, chains, &folders)
+    }
+
+    pub fn refresh_suggestions_with(
+        &self,
+        dups: &[DupGroup],
+        chains: &[VersionChain],
+        folders: &[crate::FolderDup],
+    ) -> Result<usize> {
         let now = Utc::now().timestamp();
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -327,6 +341,32 @@ impl Db {
                    updated_ts = excluded.updated_ts,
                    state = CASE WHEN suggestions.state = 'dismissed' THEN 'dismissed' ELSE 'proposed' END",
             )?;
+            // whole-folder copies first: one suggestion per group, and the
+            // per-file duplicates inside them are folded into it
+            for f in folders {
+                let saved = f.bytes * f.copies.len() as u64;
+                up.execute(params![
+                    "trash_duplicate_folder",
+                    f.keeper.to_string_lossy().to_string(),
+                    json!({"keep": f.keeper, "trash": f.copies, "files": f.files, "bytes": f.bytes}).to_string(),
+                    format!(
+                        "{} is a byte-for-byte copy of {} ({} files, {}) — move the whole copy to Trash as one step (reversible).",
+                        f.copies.iter().map(|c| c.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).collect::<Vec<_>>().join(", "),
+                        f.keeper.display(),
+                        f.files,
+                        health::human(f.bytes)
+                    ),
+                    saved as i64,
+                    2i64,
+                    now
+                ])?;
+                n += 1;
+            }
+            let inside_folder_dup = |p: &Path| {
+                folders
+                    .iter()
+                    .any(|f| p.starts_with(&f.keeper) || f.copies.iter().any(|c| p.starts_with(c)))
+            };
             for g in dups {
                 // Copies inside dependency/build trees are not the user's mess to
                 // sort file-by-file; a duplicated project is handled as a whole (Phase 6).
@@ -335,6 +375,9 @@ impl Db {
                         .iter()
                         .any(|c| filemind_core::scanner::in_noise_dir(c))
                 {
+                    continue;
+                }
+                if inside_folder_dup(&g.keeper) || g.copies.iter().any(|c| inside_folder_dup(c)) {
                     continue;
                 }
                 let saved = g.size * g.copies.len() as u64;

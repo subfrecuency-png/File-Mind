@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod pipeline;
 pub mod platform;
 pub mod rpc;
+pub mod rules;
 pub mod scheduler;
 pub mod semantic;
 pub mod watcher;

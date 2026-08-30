@@ -55,7 +55,14 @@ filemind agent install                # or: start filemind-agent at login (launc
 filemind agent status                 # is it running? watcher counters
 filemind agent stop                   # ask a running agent to stop
 filemind info ~/Downloads/x.pdf       # what FileMind and Spotlight know about one file
+filemind rule kinds                   # the three tier-0 rule kinds and their defaults
+filemind rule add archive_stale_downloads --set older_than_days=120   # starts in preview
+filemind rule                         # each rule: what it would have done in the last 7 days
+filemind rule preview 1               # what it would do right now — touches nothing
+filemind rule arm 1                   # after 7 days of preview; runs only in automate mode
+filemind mode automate                # armed rules now execute on the agent's schedule (undoable)
 filemind dev fixture /tmp/fx --entries 10000   # synthetic tree for tests/benchmarks
+filemind dev db-key                   # the SQLCipher key, for the sqlcipher shell
 ```
 
 Every scan is read-only on the scanned folder; the only thing written is the
@@ -76,3 +83,10 @@ These are enforced in code and CI, not just documented:
 ## Modes
 
 `observe` (default, read-only) → `assist` (per-transaction approval) → `automate` (tier-0 allow-listed rules only).
+
+A rule (`filemind rule`, or the Automate screen in the app) is created in
+*preview*: the agent records on every tick what the rule would have done,
+and only after seven days of that — and a look at the list — can it be
+armed. Armed rules run only while the mode is `automate`, capped per run,
+and every run is a transaction in `filemind history` with undo. Any
+conflict pauses the rule and says why.

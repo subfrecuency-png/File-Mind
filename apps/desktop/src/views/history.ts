@@ -3,7 +3,7 @@ import { rpc } from "../api";
 import { ago, button, clear, errorText, h, modal, pill, spinner, toast } from "../ui";
 import { renderDiff } from "./approvals";
 
-interface Txn { txn_id: string; state: string; created_ts: number; executed_ts: number | null; rationale: string; steps: number; done: number }
+interface Txn { txn_id: string; state: string; created_ts: number; executed_ts: number | null; rationale: string; steps: number; done: number; initiator?: string; rule_id?: string | null; trash_only?: boolean }
 interface Shown { manifest: { rationale: string }; state: string; steps: string[]; diff: string }
 interface Undone { txn_id: string; restored: number; skipped: string[] }
 
@@ -46,10 +46,10 @@ export async function historyView(main: HTMLElement, ctx: AppCtx) {
       "tr",
       { class: "clickable", onClick: () => show(t) },
       h("td", { class: "muted" }, ago(t.executed_ts ?? t.created_ts)),
-      h("td", null, pill(t.state, t.state)),
+      h("td", null, pill(t.state, t.state), t.initiator === "rule" ? h("span", null, " ", pill("rule", "tier0")) : null),
       h("td", null, h("div", null, t.rationale), h("div", { class: "mono muted" }, t.txn_id)),
       h("td", { class: "right muted" }, `${t.done}/${t.steps}`),
-      h("td", { class: "right" }, t.state === "done" ? button("Undo", (e?: Event) => { (e as Event | undefined)?.stopPropagation?.(); undo(t); }, { small: true }) : null),
+      h("td", { class: "right" }, t.state === "done" ? button(t.trash_only ? "Put back" : "Undo", (e?: Event) => { (e as Event | undefined)?.stopPropagation?.(); undo(t); }, { small: true, title: t.trash_only ? "Move the trashed items back where they were" : "Reverse this transaction" }) : null),
     ),
   );
 

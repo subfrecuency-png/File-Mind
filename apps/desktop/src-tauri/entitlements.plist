@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened runtime, nothing exotic: no JIT, no camera, no microphone.
+       The agent reads the user's folders with ordinary POSIX access; Tauri's
+       WebView needs no extra entitlement. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><false/>
+  <key>com.apple.security.cs.disable-library-validation</key><false/>
+</dict>
+</plist>

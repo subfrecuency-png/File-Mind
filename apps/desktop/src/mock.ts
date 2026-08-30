@@ -54,9 +54,87 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+interface MockJob { id: number; kind: string; state: string; label: string; done: number; total: number; started_ms: number; elapsed_ms: number; result: unknown; error: string | null }
+const jobs: MockJob[] = [];
+function startMockJob(kind: string): MockJob {
+  const total = kind === "model.download" ? 133_000_000 : kind === "analyze" ? 0 : 188_177;
+  const j: MockJob = { id: jobs.length + 1, kind, state: "running", label: kind === "scan" ? `scanning ${HOME}/Downloads` : kind === "model.download" ? "model.onnx" : kind, done: 0, total, started_ms: Date.now(), elapsed_ms: 0, result: null, error: null };
+  jobs.push(j);
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    j.elapsed_ms = Date.now() - t0;
+    j.done = Math.min(total, Math.round((j.elapsed_ms / 3000) * total));
+    if (j.elapsed_ms >= 3000) {
+      clearInterval(tick);
+      j.state = "done";
+      j.done = total;
+      j.result = kind === "scan" ? [{ path: `${HOME}/Downloads`, files: 60_211, elapsed_ms: 2900 }] : kind === "analyze" ? { suggestions: suggestions.length, duplicate_groups: 2630 } : kind === "embed" ? { embedded: 4_120, remaining: 0 } : { installed: true };
+    }
+  }, 200);
+  return j;
+}
+
+const RULE_KINDS = [
+  { kind: "archive_stale_downloads", defaults: { max_items_per_run: 50, older_than_days: 90, pause_above: 300 }, describe: "archive loose Downloads untouched for 90 days into ~/FileMind Archive (≤ 50 per run)" },
+  { kind: "collapse_versions", defaults: { max_items_per_run: 50, older_than_days: 14, pause_above: 300, strong_markers_only: true }, describe: "tuck older versions with explicit markers untouched for 14 days into a versions folder (≤ 50 per run)" },
+  { kind: "trash_exact_duplicates", defaults: { copies_in_downloads_only: true, keeper_must_be_outside_downloads: true, max_items_per_run: 50, min_bytes: 1048576, older_than_days: 30, pause_above: 300 }, describe: "trash exact copies ≥ 1.0 MB untouched for 30 days that sit in Downloads, keeper outside Downloads (≤ 50 per run)" },
+];
+interface MockRule { rule_id: number; kind: string; params: Record<string, unknown>; tier: number; state: string; created_ts: number; armed_ts: number | null; paused_ts: number | null; paused_reason: string | null }
+const rules: MockRule[] = [
+  { rule_id: 1, kind: "archive_stale_downloads", params: { max_items_per_run: 50, older_than_days: 90, pause_above: 300 }, tier: 0, state: "preview", created_ts: now - 3 * day, armed_ts: null, paused_ts: null, paused_reason: null },
+  { rule_id: 2, kind: "trash_exact_duplicates", params: { copies_in_downloads_only: true, keeper_must_be_outside_downloads: true, max_items_per_run: 50, min_bytes: 1048576, older_than_days: 30, pause_above: 300 }, tier: 0, state: "armed", created_ts: now - 12 * day, armed_ts: now - 2 * day, paused_ts: null, paused_reason: null },
+  { rule_id: 3, kind: "collapse_versions", params: { max_items_per_run: 50, older_than_days: 14, pause_above: 300, strong_markers_only: true }, tier: 0, state: "paused", created_ts: now - 20 * day, armed_ts: now - 9 * day, paused_ts: now - day, paused_reason: "step 2: /Users/ryan/Documents/Pitch/creditos deck v5.key changed since it was planned" },
+];
+function wouldHave(r: MockRule) {
+  const files = r.kind === "archive_stale_downloads" ? [`${HOME}/Downloads/old-installer.dmg`, `${HOME}/Downloads/receipt (3).pdf`, `${HOME}/Downloads/IMG_2231.HEIC`] : r.kind === "trash_exact_duplicates" ? [`${HOME}/Downloads/OFFER SHEET Calcium.pdf`] : [`${HOME}/Documents/Pitch/creditos deck v5.key`, `${HOME}/Documents/Pitch/creditos deck v6.key`];
+  const armable = now - r.created_ts >= 7 * day;
+  return { rule_id: r.rule_id, since_ts: now - 7 * day, dry_runs: Math.min(48, Math.floor((now - r.created_ts) / 1800)), real_runs: r.state === "armed" ? 2 : 0, files, bytes: 41_000_000, last_eval_ts: now - 600, last_problems: r.paused_reason ? [r.paused_reason] : [], armable, armable_in_secs: armable ? 0 : r.created_ts + 7 * day - now, armable_reason: armable ? "" : "previewing: a rule can be armed 7 days after it was created" };
+}
+
 export async function mockRpc(method: string, p: Record<string, unknown>): Promise<unknown> {
   await sleep(60);
   switch (method) {
+    case "automate.kinds":
+      return RULE_KINDS;
+    case "automate.list":
+      return { mode, preview_days: 7, rules: rules.map((r) => ({ rule: r, describe: RULE_KINDS.find((k) => k.kind === r.kind)?.describe ?? r.kind, would_have: wouldHave(r) })) };
+    case "automate.add": {
+      const kind = RULE_KINDS.find((k) => k.kind === p.kind) ?? RULE_KINDS[0];
+      const r: MockRule = { rule_id: rules.length + 1, kind: kind.kind, params: { ...kind.defaults, ...(p.params as Record<string, unknown>) }, tier: 0, state: "preview", created_ts: now, armed_ts: null, paused_ts: null, paused_reason: null };
+      rules.push(r);
+      return { rule: r, evaluation: { steps: 3, bytes: 41_000_000, candidates: 3, capped: false, problems: [], diff: "" } };
+    }
+    case "automate.preview": {
+      const r = rules.find((x) => x.rule_id === p.id)!;
+      const w = wouldHave(r);
+      const diff = w.files.map((f, i) => (r.kind === "trash_exact_duplicates" ? `  ${i}  TRASH  ${f}` : `  ${i}  MOVE   ${f}\n       →      ${HOME}/FileMind Archive/Downloads/2026/2026-03/${f.split("/").pop()}`)).join("\n");
+      return { rule: r, now: { candidates: w.files.length, candidate_bytes: w.bytes, steps: w.files.length, bytes: w.bytes, capped: false, problems: w.last_problems, diff }, keeps: r.kind === "trash_exact_duplicates" ? [`${HOME}/Documents/Offers/OFFER SHEET Calcium.pdf`] : [], would_have: w };
+    }
+    case "automate.arm": {
+      const r = rules.find((x) => x.rule_id === p.id)!;
+      if (now - r.created_ts < 7 * day) throw new Error("cannot arm: previewing");
+      r.state = "armed";
+      r.armed_ts = now;
+      r.paused_reason = null;
+      return r;
+    }
+    case "automate.pause": {
+      const r = rules.find((x) => x.rule_id === p.id)!;
+      r.state = "paused";
+      r.paused_reason = String(p.reason);
+      return { paused: true };
+    }
+    case "automate.remove": {
+      const i = rules.findIndex((x) => x.rule_id === p.id);
+      if (i >= 0) rules.splice(i, 1);
+      return { removed: i >= 0 };
+    }
+    case "jobs.start":
+      return startMockJob(String(p.kind));
+    case "jobs.list":
+      return jobs;
+    case "jobs.status":
+      return jobs.find((j) => j.id === p.id) ?? jobs[jobs.length - 1] ?? null;
     case "ping":
       return { pong: true, build: "mock" };
     case "status":

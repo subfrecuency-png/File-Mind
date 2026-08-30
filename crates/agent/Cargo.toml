@@ -29,6 +29,9 @@ rusqlite.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 filemind-adapter-macos = { path = "../adapter-macos" }
+libc.workspace = true
+# SQLCipher at rest (Phase 9.5); Windows stays plaintext until its build is sorted out.
+filemind-storage = { path = "../storage", features = ["encrypt"] }
 
 [target.'cfg(windows)'.dependencies]
 filemind-adapter-win = { path = "../adapter-win" }

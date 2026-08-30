@@ -1,10 +1,12 @@
 import { agentInfo, rpc } from "./api";
+import { resumeRunningJobs } from "./jobs";
 import { clear, h, pill } from "./ui";
 import { homeView } from "./views/home";
 import { searchView } from "./views/search";
 import { projectsView } from "./views/projects";
 import { approvalsView } from "./views/approvals";
 import { historyView } from "./views/history";
+import { automateView } from "./views/automate";
 import { settingsView } from "./views/settings";
 import { onboardingView } from "./views/onboarding";
 
@@ -21,6 +23,7 @@ const routes: Record<string, { label: string; icon: string; view: View }> = {
   search: { label: "Search", icon: "⌕", view: searchView },
   projects: { label: "Projects", icon: "▤", view: projectsView },
   approvals: { label: "Approvals", icon: "✓", view: approvalsView },
+  automate: { label: "Automate", icon: "▶", view: automateView },
   history: { label: "History", icon: "↺", view: historyView },
   settings: { label: "Settings", icon: "⚙", view: settingsView },
 };
@@ -121,6 +124,7 @@ async function boot() {
   currentParam = param ? decodeURIComponent(param) : undefined;
   await refreshNav();
   await render();
+  void resumeRunningJobs();
   setInterval(refreshNav, 15000);
 }
 

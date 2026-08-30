@@ -1,5 +1,6 @@
 import type { AppCtx } from "../main";
 import { rpc } from "../api";
+import { runJob } from "../jobs";
 import { ago, bytes, button, clear, errorText, h, num, pill, shortPath, spinner, toast } from "../ui";
 
 interface Status {
@@ -80,9 +81,8 @@ export async function homeView(main: HTMLElement, ctx: AppCtx) {
     "div",
     { class: "row" },
     button("Scan now", async () => {
-      toast("Scanning registered folders…");
       try {
-        const r = await rpc<{ files: number; elapsed_ms: number }[]>("scan");
+        const r = await runJob<{ files: number; elapsed_ms: number }[]>("scan");
         toast(`Scanned ${num(r.reduce((a, x) => a + x.files, 0))} files`, "ok");
         ctx.go("home");
       } catch (e) {
@@ -90,9 +90,8 @@ export async function homeView(main: HTMLElement, ctx: AppCtx) {
       }
     }),
     button("Re-analyze", async () => {
-      toast("Rebuilding duplicates, versions, projects and suggestions…");
       try {
-        const r = await rpc<{ suggestions: number; duplicate_groups: number }>("analyze");
+        const r = await runJob<{ suggestions: number; duplicate_groups: number }>("analyze");
         toast(`${num(r.duplicate_groups)} duplicate groups, ${num(r.suggestions)} suggestions`, "ok");
         await ctx.refreshNav();
         ctx.go("home");

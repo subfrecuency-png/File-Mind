@@ -73,6 +73,15 @@ pub fn tick(
         },
     )?;
     let a = crate::analysis::run(db)?;
+    // Automate rules: dry runs while previewing, real (journaled) runs once armed.
+    let rules = match crate::rules::tick(adapter, db) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "rules tick failed");
+            Vec::new()
+        }
+    };
+    let rules_ran = rules.iter().filter(|r| !r.dry_run).count();
     let pruned = crate::semantic::prune(db, engine)?;
     let e = crate::semantic::embed_pending(
         db,
@@ -87,7 +96,7 @@ pub fn tick(
         tracing::info!(pruned, "stale vectors dropped");
     }
     Ok(format!(
-        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  embedded {} (+{} pending, {})  health {}  dup groups {} ({})  version chains {}  suggestions {}  projects {}",
+        "roots {}  files {}  changes {}  hashed {} (+{} pending)  classified {} (+{} pending, {} sensitive)  embedded {} (+{} pending, {})  health {}  dup groups {} ({})  version chains {}  suggestions {}  projects {}  rules {} ({} ran)",
         scans.len(),
         files,
         changed,
@@ -104,7 +113,9 @@ pub fn tick(
         filemind_core::health::human(a.duplicate_bytes),
         a.version_chains,
         a.suggestions,
-        a.projects
+        a.projects,
+        rules.len(),
+        rules_ran
     ))
 }
 

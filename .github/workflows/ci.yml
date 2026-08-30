@@ -57,5 +57,7 @@ jobs:
         working-directory: apps/desktop
       - run: npm run build
         working-directory: apps/desktop
+      # tauri-build refuses to compile without the sidecars in place
+      - run: sh scripts/build-sidecar.sh --debug
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: apps/desktop/src-tauri

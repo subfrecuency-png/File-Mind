@@ -150,25 +150,13 @@ impl OsAdapter for MacAdapter {
     }
 
     fn register_autostart(&self, enable: bool) -> Result<()> {
-        let home = directories::BaseDirs::new()
-            .map(|b| b.home_dir().to_path_buf())
-            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))?;
-        let plist = launchd::plist_path(&home);
+        let home = launchd::home()?;
         if enable {
             let agent = launchd::agent_binary()?;
-            let log_dir = home.join("Library/Logs/FileMind");
-            std::fs::create_dir_all(&log_dir)?;
-            std::fs::create_dir_all(plist.parent().unwrap())?;
-            std::fs::write(&plist, launchd::plist(&agent, &log_dir))?;
-            launchd::launchctl(&["bootout", &launchd::domain(), &plist.to_string_lossy()]); // ignore failure
-            launchd::launchctl(&["bootstrap", &launchd::domain(), &plist.to_string_lossy()]);
+            let plist = launchd::install(&agent, &home)?;
             tracing::info!(plist = %plist.display(), agent = %agent.display(), "launch agent installed");
         } else {
-            launchd::launchctl(&["bootout", &launchd::domain(), &plist.to_string_lossy()]);
-            if plist.exists() {
-                // The plist is FileMind's own file, not user data; removing it is the uninstall.
-                std::fs::rename(&plist, plist.with_extension("plist.removed"))?;
-            }
+            launchd::uninstall(&home)?;
             tracing::info!("launch agent removed");
         }
         Ok(())
@@ -213,6 +201,62 @@ pub mod launchd {
             .join(format!("{LABEL}.plist"))
     }
 
+    pub fn home() -> Result<PathBuf> {
+        directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("no home directory")))
+    }
+
+    /// Write the plist for `agent` and (re)load it. Safe to call on every
+    /// app launch: when the recorded program is already `agent` the loaded
+    /// job is left alone, otherwise it is booted out and back in so launchd
+    /// follows the binary when the app bundle moves. Returns the plist path.
+    pub fn install(agent: &Path, home: &Path) -> Result<PathBuf> {
+        let plist = plist_path(home);
+        let log_dir = home.join("Library/Logs/FileMind");
+        std::fs::create_dir_all(&log_dir)?;
+        std::fs::create_dir_all(plist.parent().unwrap())?;
+        let body = plist_body(agent, &log_dir);
+        let unchanged = std::fs::read_to_string(&plist)
+            .map(|cur| cur == body)
+            .unwrap_or(false);
+        let domain = domain();
+        let p = plist.to_string_lossy().to_string();
+        if unchanged && launchctl_ok(&["print", &format!("{domain}/{LABEL}")]) {
+            return Ok(plist);
+        }
+        std::fs::write(&plist, body)?;
+        launchctl(&["bootout", &domain, &p]); // ignore failure: may not be loaded
+        launchctl(&["bootstrap", &domain, &p]);
+        Ok(plist)
+    }
+
+    /// Unload and retire the plist (renamed, never deleted — it is FileMind's
+    /// own file, but the no-hard-delete rule is easier to audit without
+    /// exceptions).
+    pub fn uninstall(home: &Path) -> Result<()> {
+        let plist = plist_path(home);
+        launchctl(&["bootout", &domain(), &plist.to_string_lossy()]);
+        if plist.exists() {
+            std::fs::rename(&plist, plist.with_extension("plist.removed"))?;
+        }
+        Ok(())
+    }
+
+    /// The program the installed plist points at, if there is one.
+    pub fn installed_program(home: &Path) -> Option<PathBuf> {
+        let body = std::fs::read_to_string(plist_path(home)).ok()?;
+        let start = body.find("<key>ProgramArguments</key>")?;
+        let rest = &body[start..];
+        let s = rest.find("<string>")? + "<string>".len();
+        let e = rest[s..].find("</string>")? + s;
+        Some(PathBuf::from(&rest[s..e]))
+    }
+
+    pub fn is_installed(home: &Path) -> bool {
+        plist_path(home).is_file()
+    }
+
     pub fn domain() -> String {
         #[cfg(unix)]
         let uid = unsafe { libc_getuid() };
@@ -243,7 +287,12 @@ pub mod launchd {
         Ok(agent)
     }
 
+    /// Kept for callers that want the text; `install` writes it.
     pub fn plist(agent: &Path, log_dir: &Path) -> String {
+        plist_body(agent, log_dir)
+    }
+
+    fn plist_body(agent: &Path, log_dir: &Path) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -254,6 +303,7 @@ pub mod launchd {
   <array><string>{agent}</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>ProcessType</key><string>Background</string>
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
@@ -269,15 +319,34 @@ pub mod launchd {
     }
 
     pub fn launchctl(args: &[&str]) {
+        launchctl_ok(args);
+    }
+
+    /// Run `launchctl`; true when it succeeded. A no-op (false) off macOS.
+    pub fn launchctl_ok(args: &[&str]) -> bool {
         if !cfg!(target_os = "macos") {
-            return;
+            return false;
         }
         match std::process::Command::new("launchctl").args(args).output() {
             Ok(o) if !o.status.success() => {
-                tracing::debug!(args = ?args, stderr = %String::from_utf8_lossy(&o.stderr), "launchctl")
+                tracing::debug!(args = ?args, stderr = %String::from_utf8_lossy(&o.stderr), "launchctl");
+                false
             }
-            Err(e) => tracing::warn!(error = %e, "launchctl not runnable"),
-            _ => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "launchctl not runnable");
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// Ask launchd to start the loaded job now (`restart` = kill a running one first).
+    pub fn kickstart(restart: bool) -> bool {
+        let target = format!("{}/{LABEL}", domain());
+        if restart {
+            launchctl_ok(&["kickstart", "-k", &target])
+        } else {
+            launchctl_ok(&["kickstart", &target])
         }
     }
 }

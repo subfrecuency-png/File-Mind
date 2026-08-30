@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# SQLCipher at rest (Phase 9.5). Vendors OpenSSL; enabled by the agent, CLI
+# and desktop crates on Unix targets.
+encrypt = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+
 [dependencies]
 filemind-core = { path = "../core" }
 anyhow.workspace = true
@@ -13,7 +19,12 @@ serde_json.workspace = true
 tracing.workspace = true
 directories.workspace = true
 chrono.workspace = true
+blake3.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 [dev-dependencies]
 tempfile.workspace = true
 chrono.workspace = true
+blake3.workspace = true

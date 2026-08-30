@@ -120,17 +120,32 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Graceful stop on SIGTERM / SIGINT (launchd `bootout`, Ctrl-C) and on the
+/// stop file `filemind agent stop` writes. The signal handler only flips an
+/// atomic; a watcher thread turns that into the callback, so nothing
+/// non-async-signal-safe runs inside the handler.
 #[cfg(unix)]
 fn ctrlc_handler<F: Fn() + Send + Sync + 'static>(f: F) {
-    // Minimal signal handling without a dependency: a thread that waits on a
-    // self-pipe would be nicer; for now we rely on `signal` via libc-free
-    // approach: std does not expose SIGTERM, so use the `ctrlc`-style trick
-    // through `std::os::unix` is unavailable — fall back to a watcher on a
-    // stop file next to the socket, written by `filemind agent stop`.
+    use std::sync::atomic::AtomicBool;
+    static SIGNALLED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn on_signal(_sig: libc::c_int) {
+        SIGNALLED.store(true, Ordering::SeqCst);
+    }
+    // SAFETY: installing a handler that only touches an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGHUP, on_signal as *const () as libc::sighandler_t);
+    }
     let stop_file = filemind_storage::default_db_path()
         .map(|p| p.with_file_name("agent.stop"))
         .ok();
     std::thread::spawn(move || loop {
+        if SIGNALLED.load(Ordering::SeqCst) {
+            tracing::info!("signal received, stopping");
+            f();
+            return;
+        }
         if let Some(p) = &stop_file {
             if p.exists() {
                 let _ = std::fs::remove_file(p); // filemind:own-file (control file, never user data)

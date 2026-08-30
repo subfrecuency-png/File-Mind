@@ -18,7 +18,9 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RiskTier {
-    /// Reversible, never touches project folders, never trashes.
+    /// Reversible and low blast radius: only the allow-listed rule kinds in
+    /// `core::rules` (capped per run, old untouched files only, never
+    /// sensitive files, never inside project or noise trees).
     Tier0,
     /// Reversible but touches user-organised locations.
     Tier1,

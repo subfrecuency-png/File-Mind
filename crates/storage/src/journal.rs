@@ -89,6 +89,15 @@ impl Db {
                 rationale: m.rationale,
                 steps: r.get::<_, i64>(6)? as usize,
                 done: r.get::<_, i64>(5)? as usize,
+                initiator: match m.initiator {
+                    filemind_core::txn::Initiator::User => "user".into(),
+                    filemind_core::txn::Initiator::Rule => "rule".into(),
+                },
+                rule_id: m.rule_id,
+                trash_only: !m.steps.is_empty()
+                    && m.steps
+                        .iter()
+                        .all(|s| matches!(s, filemind_core::txn::Step::Trash { .. })),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -113,6 +122,17 @@ impl Db {
                     tx.execute(
                         "UPDATE files SET status = 'trashed' WHERE path = ?1 AND status = 'present'",
                         [path.to_string_lossy()],
+                    )?;
+                    // a trashed folder takes everything under it along
+                    let prefix = format!("{}/%", path.to_string_lossy());
+                    tx.execute(
+                        "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
+                         SELECT file_id, ?2, 'deleted', path, NULL, 'txn' FROM files WHERE path LIKE ?1 AND status = 'present'",
+                        params![prefix, now],
+                    )?;
+                    tx.execute(
+                        "UPDATE files SET status = 'trashed' WHERE path LIKE ?1 AND status = 'present'",
+                        [prefix],
                     )?;
                 }
                 Step::Move { from, to, .. } => {
@@ -146,6 +166,11 @@ pub struct TxnSummary {
     pub rationale: String,
     pub steps: usize,
     pub done: usize,
+    /// "user" or "rule"; `rule_id` names the suggestion or rule behind it.
+    pub initiator: String,
+    pub rule_id: Option<String>,
+    /// Every step is a Trash: undo is Finder's "Put Back".
+    pub trash_only: bool,
 }
 
 impl Journal for Db {

@@ -7,7 +7,7 @@ interface List { proposed: number; est_bytes: number; items: Suggestion[] }
 interface Plan { txn_id: string; steps: number; diff: string; problems: string[]; risk_tier: number; mode: string; fingerprint: string }
 interface Applied { txn_id: string; done: number; failed: number; state: string }
 
-const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", collapse_versions: "Versions", stale_downloads: "Stale downloads" };
+const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", trash_duplicate_folder: "Duplicate folder", collapse_versions: "Versions", stale_downloads: "Stale downloads" };
 
 /** Colour the plan's KEEP / TRASH / MOVE lines. */
 export function renderDiff(diff: string): HTMLElement {

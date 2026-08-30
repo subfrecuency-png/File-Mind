@@ -92,3 +92,95 @@ fn finds_planted_duplicates_and_versions() {
     let dismissed = db.list_suggestions("dismissed", 10).unwrap();
     assert_eq!(dismissed[0].id, first);
 }
+
+/// A folder that is a byte-for-byte copy of another becomes one suggestion,
+/// and its per-file duplicates are not listed separately.
+#[test]
+fn whole_folder_copies_are_one_suggestion() {
+    let adapter = filemind_adapter_macos::MacAdapter;
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", tmp.path());
+    std::env::set_var("XDG_DATA_HOME", tmp.path().join(".local/share"));
+    let root = tmp.path().join("r");
+    for (dir, salt) in [("creditos", 0u8), ("creditos-v1", 0), ("other", 1)] {
+        let d = root.join(dir).join("src");
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 0..6u8 {
+            let body: Vec<u8> = (0..100_000u32).map(|x| (x as u8) ^ i ^ salt).collect();
+            std::fs::write(d.join(format!("f{i}.bin")), body).unwrap();
+        }
+    }
+    let root = root.canonicalize().unwrap();
+    let db = Db::open_in_memory().unwrap();
+    db.add_root(&root).unwrap();
+    pipeline::scan_root(&adapter, &db, &root).unwrap();
+    pipeline::hash_pending(
+        &db,
+        HashOpts {
+            duty_cycle: 1.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let folders = db.folder_duplicates(5).unwrap();
+    assert_eq!(folders.len(), 1, "{folders:?}");
+    assert!(
+        folders[0].keeper.ends_with("creditos"),
+        "unmarked name is kept: {:?}",
+        folders[0]
+    );
+    assert_eq!(folders[0].copies.len(), 1);
+    assert_eq!(folders[0].files, 6);
+
+    let dups = db.rebuild_duplicates().unwrap();
+    let chains = db.rebuild_versions().unwrap();
+    db.refresh_suggestions(&dups, &chains).unwrap();
+    let s = db.list_suggestions("proposed", usize::MAX).unwrap();
+    assert_eq!(
+        s.iter()
+            .filter(|x| x.kind == "trash_duplicate_folder")
+            .count(),
+        1
+    );
+    assert_eq!(
+        s.iter().filter(|x| x.kind == "trash_duplicates").count(),
+        0,
+        "per-file dups folded into the folder suggestion"
+    );
+
+    // the whole copy goes to Trash as one step, and comes back as one step
+    db.set_setting("mode", &serde_json::json!("assist"))
+        .unwrap();
+    let sug = s
+        .iter()
+        .find(|x| x.kind == "trash_duplicate_folder")
+        .unwrap();
+    let (_, plan) = filemind_agent::actions::plan(&adapter, &db, sug.id).unwrap();
+    assert_eq!(plan.steps, 1, "{}", plan.diff);
+    assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+    let applied = filemind_agent::actions::apply(&adapter, &db, sug.id, true, None).unwrap();
+    assert_eq!(applied.done, 1);
+    assert!(!root.join("creditos-v1").exists());
+    assert!(root.join("creditos/src/f0.bin").exists());
+    let trashed: i64 = db
+        .conn
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='trashed' AND kind='file'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(trashed, 6, "files under the trashed folder are marked");
+    let undone = filemind_agent::actions::undo(&adapter, &db, &applied.txn_id).unwrap();
+    assert_eq!(undone.restored, 1);
+    assert!(root.join("creditos-v1/src/f0.bin").exists());
+    let trashed: i64 = db
+        .conn
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='trashed' AND kind='file'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(trashed, 0);
+}

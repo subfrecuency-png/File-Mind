@@ -46,6 +46,36 @@ export async function agentStop(): Promise<boolean> {
   return (await invoke("agent_stop")) as boolean;
 }
 
+/** Forget the in-process context so the next call re-opens the database and engine. */
+export async function localReset(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("local_reset");
+}
+
+export interface Autostart { supported: boolean; enabled: boolean; program: string | null; plist: string | null }
+
+export async function autostartGet(): Promise<Autostart> {
+  if (!isTauri) return { supported: true, enabled: true, program: "/Applications/FileMind.app/Contents/MacOS/filemind-agent", plist: "~/Library/LaunchAgents/ai.filemind.agent.plist" };
+  return (await invoke("autostart_get")) as Autostart;
+}
+
+export async function autostartSet(enabled: boolean): Promise<Autostart> {
+  if (!isTauri) return { supported: true, enabled, program: "/Applications/FileMind.app/Contents/MacOS/filemind-agent", plist: null };
+  return (await invoke("autostart_set", { enabled })) as Autostart;
+}
+
+export interface UpdateInfo { available: boolean; current: string; version?: string; date?: string | null; notes?: string | null }
+
+export async function updateCheck(): Promise<UpdateInfo> {
+  if (!isTauri) return { available: false, current: "0.1.0 (mock)" };
+  return (await invoke("update_check")) as UpdateInfo;
+}
+
+export async function updateInstall(): Promise<unknown> {
+  if (!isTauri) return { installed: false };
+  return invoke("update_install");
+}
+
 /** Native folder picker; null when cancelled. In the browser, a prompt. */
 export async function pickFolder(): Promise<string | null> {
   if (!isTauri) return window.prompt("Folder path to add", "/Users/you/Documents");

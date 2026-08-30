@@ -187,3 +187,16 @@ pre.diff .move { color: var(--accent); }
 .cat-bar i { display: block; height: 100%; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+/* ---- background jobs strip (Phase 9) ---- */
+.jobs { position: fixed; left: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 55; width: 340px; }
+.job { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: 12px; transition: opacity .3s; }
+.job-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.job-head b { text-transform: capitalize; }
+.job-head span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job.indeterminate .bar > i { width: 30% !important; animation: job-slide 1.2s infinite ease-in-out; }
+.job.done .bar > i { background: var(--ok); }
+.job.failed .bar > i { background: var(--danger); }
+.job.failed .job-head span { color: var(--danger); }
+@keyframes job-slide { 0% { margin-left: 0 } 50% { margin-left: 70% } 100% { margin-left: 0 } }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }

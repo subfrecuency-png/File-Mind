@@ -59,6 +59,18 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
                 });
             }
         }
+        "trash_duplicate_folder" => {
+            if let Some(k) = s.subject["keep"].as_str() {
+                m.keeps.push(PathBuf::from(k));
+            }
+            for p in paths(&s.subject["trash"]) {
+                m.steps.push(Step::Trash {
+                    path: p,
+                    hash_before: None,
+                    trashed_to: None,
+                });
+            }
+        }
         "collapse_versions" => {
             let keep = PathBuf::from(s.subject["keep"].as_str().unwrap_or_default());
             let stem = keep
@@ -275,8 +287,11 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
                 }
                 Step::Trash { path, .. } => {
                     db.conn.execute(
-                        "UPDATE files SET status = 'present' WHERE path = ?1 AND status = 'trashed'",
-                        [path.to_string_lossy()],
+                        "UPDATE files SET status = 'present' WHERE (path = ?1 OR path LIKE ?2) AND status = 'trashed'",
+                        rusqlite::params![
+                            path.to_string_lossy(),
+                            format!("{}/%", path.to_string_lossy())
+                        ],
                     )?;
                     db.conn.execute(
                         "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
@@ -297,6 +312,18 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
 /// Settle anything a previous process left running. Called on agent start
 /// and before any new transaction.
 pub fn recover_all(adapter: &dyn OsAdapter, db: &Db) -> Result<Vec<(String, TxnState)>> {
+    // The database opened fine: the plaintext copy kept from the SQLCipher
+    // conversion (Phase 9.5) is no longer needed. Trash, never delete.
+    if let Ok(Some(backup)) = db.pre_cipher_backup_ready_to_trash() {
+        match adapter.move_to_trash(&backup) {
+            Ok(_) => {
+                tracing::info!(backup = %backup.display(), "pre-SQLCipher plaintext copy moved to Trash")
+            }
+            Err(e) => {
+                tracing::warn!(backup = %backup.display(), error = %e, "could not trash the plaintext copy")
+            }
+        }
+    }
     let mut out = Vec::new();
     for id in filemind_core::txn::Journal::unfinished(db)? {
         let rep = txn::recover(adapter, db, &id)?;
