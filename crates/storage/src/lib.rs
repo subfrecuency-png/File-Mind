@@ -188,6 +188,18 @@ impl Db {
     /// encrypted file, then swap them. The plaintext file is renamed, never
     /// deleted.
     fn encrypt_in_place(path: &Path, key: &[u8; 32]) -> Result<()> {
+        // An agent (of any build) still holding the plaintext file open would
+        // keep writing to the renamed copy after the swap. Refuse until it is
+        // stopped; the socket lives next to the database.
+        #[cfg(unix)]
+        {
+            let sock = path.with_file_name("agent.sock");
+            if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+                anyhow::bail!(
+                    "the database needs a one-time encryption, but an agent is running. Stop it first (`filemind agent stop`, or Settings → Background agent → Stop) and try again."
+                );
+            }
+        }
         let enc = path.with_extension("db.enc-tmp");
         let backup = Self::pre_cipher_backup(path);
         if enc.exists() {

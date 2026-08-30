@@ -1,0 +1,3 @@
+# sidecars are rebuilt by scripts/build-sidecar.sh; a changed copy must not
+# retrigger `tauri dev`
+binaries/
