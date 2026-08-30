@@ -306,6 +306,10 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
             }
         }
     }
+    if !rep.skipped.is_empty() {
+        // the beta's "data loss" definition: an undo that could not put a file back
+        let _ = db.bump_metric("undo_failures", 1);
+    }
     Ok(Undone {
         txn_id: txn_id.to_string(),
         restored: rep.restored,

@@ -82,6 +82,9 @@ pub fn tick(
         }
     };
     let rules_ran = rules.iter().filter(|r| !r.dry_run).count();
+    if let Err(e) = crate::telemetry::maybe_send(db) {
+        tracing::warn!(error = %e, "telemetry not sent");
+    }
     let pruned = crate::semantic::prune(db, engine)?;
     let e = crate::semantic::embed_pending(
         db,

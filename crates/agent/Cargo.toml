@@ -26,6 +26,7 @@ serde_json.workspace = true
 chrono.workspace = true
 directories.workspace = true
 rusqlite.workspace = true
+ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(unix)'.dependencies]
 filemind-adapter-macos = { path = "../adapter-macos" }

@@ -76,6 +76,20 @@ export async function updateInstall(): Promise<unknown> {
   return invoke("update_install");
 }
 
+export async function feedbackUrl(kind: "feedback" | "bug" | "crash", report?: string): Promise<string> {
+  if (!isTauri) return `https://github.com/subfrecuency/filemind/issues/new?title=${encodeURIComponent("Feedback: ")}`;
+  return (await invoke("feedback_url", { kind, report: report ?? null })) as string;
+}
+
+export async function openUrl(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, "_blank");
+    return;
+  }
+  const { openUrl: ou } = await import("@tauri-apps/plugin-opener");
+  await ou(url);
+}
+
 /** Native folder picker; null when cancelled. In the browser, a prompt. */
 export async function pickFolder(): Promise<string | null> {
   if (!isTauri) return window.prompt("Folder path to add", "/Users/you/Documents");

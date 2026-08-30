@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Mind AI/OS — Your computer has memory. Now give it a mind.</title>
+<meta name="description" content="Local-first file health, search by meaning and reversible clean-up for macOS. FileMind finds the duplicates, dead versions and stale downloads eating your disk, and tidies up one reviewable, undoable step at a time.">
+<meta property="og:title" content="File Mind AI/OS">
+<meta property="og:description" content="Your computer has memory. Now give it a mind. Local-first file health, search by meaning and reversible clean-up for macOS.">
+<meta property="og:image" content="assets/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a class="brand" href="./"><img src="assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#safety">Safety</a>
+      <a href="#privacy">Privacy</a>
+      <a href="docs/">Docs</a>
+    </div>
+    <a class="btn primary small" href="#beta">Join the beta</a>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <span class="eyebrow"><i></i> macOS beta · local-first · every change undoable</span>
+      <h1>Your computer<br>has memory.<br>Now give it a <em>mind.</em></h1>
+      <p class="lead">FileMind watches the folders you choose, learns what your files are, and finds the duplicates, dead versions and stale downloads eating your disk. Search by meaning, ask questions about your own documents, and let it tidy up — one reviewable, reversible step at a time.</p>
+      <div class="ctas">
+        <a class="btn primary" href="#beta">Download for macOS</a>
+        <a class="btn ghost" href="#safety">Read the six rules</a>
+      </div>
+      <p class="fine">Free during the beta. Nothing leaves your Mac unless you switch on an AI adapter — and then only file names and 2 KB snippets, all logged.</p>
+    </div>
+    <div class="art"><img src="assets/mascot.png" width="880" height="800" alt="The FileMind mascot: a glowing circuit-brain character surrounded by folders"></div>
+  </header>
+
+  <section id="what">
+    <p class="kicker">What it does</p>
+    <h2>A memory for your files, and a mind that keeps them tidy</h2>
+    <p class="sub">It runs on your Mac, indexes the folders you choose, and never touches a file without a plan you can read and a transaction you can undo.</p>
+    <div class="grid c3">
+      <div class="card"><span class="icon">◎</span><h3>A health score, and what is costing points</h3><p>Duplicates, dead versions, stale downloads, sensitive files in the wrong place. One number, a breakdown, and a suggestion for each — every one previewed before anything moves.</p></div>
+      <div class="card"><span class="icon">⌕</span><h3>Search by meaning. Ask in plain language.</h3><p>“the offer sheet for the calcium supplier from last spring, pdf” finds it. Ask a question and get an answer from your own documents, with the sources listed and every call audited.</p></div>
+      <div class="card"><span class="icon">▶</span><h3>Automate, after it shows its work</h3><p>Tier-0 rules run unattended only after a seven-day preview of what they would have done. Capped per run, paused on any conflict, undoable like everything else.</p></div>
+    </div>
+  </section>
+
+  <section id="how" class="tight">
+    <p class="kicker">How it works</p>
+    <h2>Three modes. You decide how much it may do.</h2>
+    <div class="modes" style="margin-top:40px">
+      <div><h3><small>01</small> Observe <span class="tag">default</span></h3><p>Indexes, searches, suggests. Never moves a file.</p></div>
+      <div><h3><small>02</small> Assist</h3><p>Applies a suggestion only after you approve its plan. Every step journaled, every transaction undoable.</p></div>
+      <div><h3><small>03</small> Automate</h3><p>Allow-listed rules run on their own — after a week of showing you exactly what they would have done.</p></div>
+    </div>
+  </section>
+
+  <section id="safety">
+    <p class="kicker">Safety</p>
+    <h2>Six rules it cannot break</h2>
+    <p class="sub">Enforced in code and in CI, not in a policy document. The only way FileMind can delete anything is to move it to the Trash, and CI fails the build if a hard delete appears in the core.</p>
+    <div class="rules">
+      <div class="rule"><h3><span class="n">1</span>Never delete permanently</h3><p>Trash is the only deletion primitive. There is no <code>rm</code> in the core, and the lint that proves it runs on every commit.</p></div>
+      <div class="rule"><h3><span class="n">2</span>Never mass-move without a manifest</h3><p>Every change is a transaction: written and synced to disk before step one, replayable after a crash, reversible after.</p></div>
+      <div class="rule"><h3><span class="n">3</span>Never overwrite</h3><p>A move whose destination exists is refused. Conflicts get a visible name and a note — never a silent rename.</p></div>
+      <div class="rule"><h3><span class="n">4</span>Never silently rename</h3><p>Every rename is a step in the plan you approve. What you saw in the preview is what runs, checked by fingerprint.</p></div>
+      <div class="rule"><h3><span class="n">5</span>Never follow unknown links</h3><p>Symlinks and junctions are recorded, not traversed. Nothing outside the folders you chose is ever read or moved.</p></div>
+      <div class="rule"><h3><span class="n">6</span>Never touch the OS or app internals</h3><p>System folders, app bundles and Library are protected at the scanner, the planner and the adapter — three layers deep.</p></div>
+    </div>
+  </section>
+
+  <section id="privacy" class="tight">
+    <p class="kicker">Privacy</p>
+    <h2>Local by default. Explicit about the exceptions.</h2>
+    <div class="grid c3" style="margin-top:40px">
+      <div class="card raised"><h3 style="margin-top:0">Stays on your Mac</h3><ul>
+        <li>The index, the content hashes, the extracted text</li>
+        <li>The embedding model and every vector it produces</li>
+        <li>The transaction journal and your undo history</li>
+        <li>The database itself — encrypted at rest, key in your Keychain</li></ul></div>
+      <div class="card raised"><h3 style="margin-top:0">What an AI adapter sees</h3><ul>
+        <li>Nothing, until you turn one on in Settings</li>
+        <li>For a question: file names, folders, dates and up to 2 KB of text</li>
+        <li>Never a full file, never a path outside your chosen folders</li>
+        <li>Never a file marked sensitive (keys, .env, card and ID numbers)</li></ul></div>
+      <div class="card raised"><h3 style="margin-top:0">The audit log</h3><ul>
+        <li>Every call to any adapter — local Ollama or cloud</li>
+        <li>Which model, when, how many bytes, and whether it left the machine</li>
+        <li>Ollama “cloud” models are labelled CLOUD, not local</li>
+        <li>Viewable in the app; the text itself is never stored</li></ul></div>
+    </div>
+    <p class="fine" style="margin-top:20px">Details, including what opt-in telemetry sends if you enable it, are in the <a href="docs/privacy.html" style="color:var(--cyan)">privacy page</a>.</p>
+  </section>
+
+  <section id="beta" class="tight">
+    <div class="cta">
+      <h2>Join the macOS beta</h2>
+      <p>One hundred people, one goal: a crash-free rate above 99% and zero files lost — where “lost” means any undo that could not put something back. Telemetry is off by default; when it is on it sends counts, never names.</p>
+      <form class="signup" id="signup" method="post">
+        <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
+        <button class="btn primary" type="submit">Request an invite</button>
+      </form>
+      <p class="fine">macOS 14 or newer · Apple silicon and Intel · signed and notarized</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 File Mind AI/OS</span>
+    <nav>
+      <a href="docs/">Docs</a>
+      <a href="docs/privacy.html">Privacy</a>
+      <a href="docs/changelog.html">Changelog</a>
+      <a href="https://github.com/subfrecuency/filemind">GitHub</a>
+      <a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a>
+    </nav>
+  </footer>
+</div>
+<script>
+  // Beta signup. Set SIGNUP_ENDPOINT to a form backend (e.g. a Formspree URL)
+  // to POST there; while it is empty the form opens a pre-filled email instead.
+  const SIGNUP_ENDPOINT = "";
+  const form = document.getElementById("signup");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = form.email.value.trim();
+    if (!SIGNUP_ENDPOINT) {
+      location.href = `mailto:subfrecuency@gmail.com?subject=${encodeURIComponent("FileMind beta invite")}&body=${encodeURIComponent(`Please add ${email} to the macOS beta.\n\nMac model / macOS version:\nWhat I mostly need to clean up:`)}`;
+      return;
+    }
+    const btn = form.querySelector("button");
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      const r = await fetch(SIGNUP_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ email }) });
+      btn.textContent = r.ok ? "Requested — thank you" : "Something went wrong";
+    } catch { btn.textContent = "Something went wrong"; }
+  });
+</script>
+</body>
+</html>

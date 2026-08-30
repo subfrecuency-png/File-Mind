@@ -293,6 +293,13 @@ enum RuleCmd {
     Runs { id: i64 },
     /// Evaluate every rule now (and run armed ones if the mode is automate).
     Tick,
+    /// Change a rule's parameters (validated; bounds still apply).
+    Set {
+        id: i64,
+        /// e.g. pause_above=1000 max_items_per_run=100
+        #[arg(value_name = "KEY=VALUE", required = true)]
+        set: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -558,7 +565,7 @@ fn human_bytes(b: u64) -> String {
 }
 
 fn main() {
-    filemind_core::install_quiet_panic_hook();
+    filemind_agent::crash::install("cli");
     // `filemind search … | head` closes our stdout early; the default Rust
     // behaviour is a `println!` panic on EPIPE. Restore SIGPIPE's default
     // disposition so the process simply ends, like every other CLI tool.
@@ -2054,6 +2061,27 @@ fn run() -> Result<()> {
                             .unwrap_or_default()
                     );
                 }
+            }
+            Some(RuleCmd::Set { id, set }) => {
+                let cur = rpc(adapter.as_ref(), "automate.preview", json!({"id": id}))?["rule"]
+                    ["params"]
+                    .clone();
+                let mut params = cur.as_object().cloned().unwrap_or_default();
+                for kv in set {
+                    let (k, v) = kv
+                        .split_once('=')
+                        .ok_or_else(|| anyhow::anyhow!("wants KEY=VALUE, got {kv:?}"))?;
+                    params.insert(
+                        k.to_string(),
+                        serde_json::from_str(v).unwrap_or(Value::String(v.to_string())),
+                    );
+                }
+                let r = rpc(
+                    adapter.as_ref(),
+                    "automate.set_params",
+                    json!({"id": id, "params": params}),
+                )?;
+                println!("rule #{id} params: {}", r["params"]);
             }
             Some(RuleCmd::Tick) => {
                 for o in rpc(adapter.as_ref(), "automate.tick", json!({}))?

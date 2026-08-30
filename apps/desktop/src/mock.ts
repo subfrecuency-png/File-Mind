@@ -94,6 +94,16 @@ function wouldHave(r: MockRule) {
 export async function mockRpc(method: string, p: Record<string, unknown>): Promise<unknown> {
   await sleep(60);
   switch (method) {
+    case "telemetry.get":
+      return { enabled: false, endpoint: "", install_id: null, last_sent_day: null, fields: ["schema", "install_id"], preview: { schema: 1, install_id: "", day: "2026-08-29", version: "0.2.0", os: "macos", arch: "aarch64", health_bucket: "70-79", files_bucket: "100k-250k", suggestions_applied: 1, suggestions_undone: 0, rules_armed: 0, rule_runs: 0, sessions: 3, crash_free_sessions: 3, undo_failures: 0, adapter: "ollama" } };
+    case "telemetry.set":
+      return { enabled: p.enabled };
+    case "crash.list":
+      return [{ name: "20260829T210000-agent.txt", bytes: 2400, ts: now - 3600, component: "agent", message: "index out of bounds: the len is 3 but the index is 7" }];
+    case "crash.read":
+      return { name: p.name, text: "FileMind crash report\ncomponent: agent\nversion: 0.2.0\nmessage: index out of bounds\n\nbacktrace:\n   0: filemind_agent::watcher::run\n" };
+    case "crash.settle":
+      return { settled: true };
     case "automate.kinds":
       return RULE_KINDS;
     case "automate.list":

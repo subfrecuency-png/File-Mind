@@ -436,6 +436,7 @@ pub fn arm(db: &Db, rule_id: i64) -> Result<Rule> {
         bail!("cannot arm rule #{rule_id}: {why}");
     }
     db.arm_automation(rule_id)?;
+    let _ = db.bump_metric("rules_armed", 1);
     Ok(db.get_automation(rule_id)?.expect("exists"))
 }
 

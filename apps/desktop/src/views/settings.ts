@@ -1,10 +1,12 @@
 import type { AppCtx } from "../main";
-import { agentInfo, agentStart, agentStop, autostartGet, autostartSet, isTauri, localReset, pickFolder, rpc, updateCheck, updateInstall } from "../api";
+import { agentInfo, agentStart, agentStop, autostartGet, autostartSet, feedbackUrl, isTauri, localReset, openUrl, pickFolder, rpc, updateCheck, updateInstall } from "../api";
 import { runJob } from "../jobs";
-import { ago, button, clear, date, errorText, h, num, pill, shortPath, spinner, toast } from "../ui";
+import { ago, button, clear, date, errorText, h, modal, num, pill, shortPath, spinner, toast } from "../ui";
 
 interface AiConfig { adapter: "none" | "ollama" | "cloud"; ollama_url: string; ollama_model: string; cloud_model: string; cloud_key: string }
 interface Audit { id: number; ts: number; adapter: string; purpose: string; bytes_sent: number; local: boolean; ok: boolean; latency_ms: number | null }
+interface Telemetry { enabled: boolean; endpoint: string; install_id: string | null; last_sent_day: string | null; fields: string[]; preview: Record<string, unknown> }
+interface Crash { name: string; bytes: number; ts: number; component: string; message: string }
 interface Embed { model: string; semantic: boolean; vectors: number; embedded: number; pending: number; model_installed: boolean }
 
 export async function settingsView(main: HTMLElement, ctx: AppCtx) {
@@ -18,6 +20,7 @@ export async function settingsView(main: HTMLElement, ctx: AppCtx) {
     agentInfo(),
   ]);
   const autostart = await autostartGet().catch(() => null);
+  const [tele, crashes] = await Promise.all([rpc<Telemetry>("telemetry.get").catch(() => null), rpc<Crash[]>("crash.list").catch(() => [] as Crash[])]);
   clear(main);
 
   // ---- mode ---------------------------------------------------------------
@@ -212,6 +215,41 @@ export async function settingsView(main: HTMLElement, ctx: AppCtx) {
   }
   renderUpdate("");
 
+  // ---- feedback & diagnostics (Phase 10) ------------------------------------
+  const diagBox = h("div");
+  function renderDiag() {
+    clear(diagBox);
+    const crashList = crashes.length
+      ? h("table", null, h("tbody", null, crashes.map((c) => h("tr", null,
+          h("td", { class: "muted" }, ago(c.ts)), h("td", null, h("div", null, h("b", null, c.component), " · ", c.message || "panic"), h("div", { class: "mono muted", style: { fontSize: "11px" } }, c.name)),
+          h("td", { class: "right" }, h("div", { class: "row" },
+            button("Read", async () => { const r = await rpc<{ text: string }>("crash.read", { name: c.name }); modal(c.name, h("pre", { class: "diff", style: { whiteSpace: "pre-wrap" } }, r.text)); }, { small: true, kind: "ghost" }),
+            button("Send with feedback", async () => { try { await openUrl(await feedbackUrl("crash", c.name)); crashes.splice(crashes.indexOf(c), 1); renderDiag(); } catch (e) { toast(errorText(e), "error"); } }, { small: true, kind: "primary" }),
+            button("Dismiss", async () => { await rpc("crash.settle", { name: c.name, state: "dismissed" }); crashes.splice(crashes.indexOf(c), 1); renderDiag(); }, { small: true, kind: "ghost" }),
+          ))))))
+      : h("p", { class: "muted", style: { fontSize: "13px", margin: "0" } }, "No crash reports. If the app or the agent ever panics, a report lands here — nothing is sent unless you send it.");
+    const preview = tele ? h("details", null, h("summary", { class: "muted", style: { cursor: "pointer" } }, "Exactly what would be sent for yesterday"), h("pre", { class: "diff", style: { whiteSpace: "pre-wrap", marginTop: "8px" } }, JSON.stringify(tele.preview, null, 2))) : null;
+    diagBox.append(
+      h("div", { class: "kv" },
+        h("span", { class: "k" }, "Feedback"), h("div", { class: "row" },
+          button("Send feedback", async () => openUrl(await feedbackUrl("feedback")), { small: true, kind: "primary" }),
+          button("Report a bug", async () => openUrl(await feedbackUrl("bug")), { small: true }),
+          h("span", { class: "muted", style: { fontSize: "12px" } }, "opens a pre-filled GitHub issue with the version and build; nothing else is attached unless you attach it"),
+        ),
+        h("span", { class: "k" }, "Crash reports"), crashList,
+        h("span", { class: "k" }, "Share aggregate usage"), tele
+          ? h("div", null,
+              h("label", { class: "switch" }, h("input", { type: "checkbox", checked: tele.enabled, onChange: async (e: Event) => {
+                const on = (e.target as HTMLInputElement).checked;
+                try { await rpc("telemetry.set", { enabled: on }); toast(on ? "Thank you. One document a day, counts only." : "Telemetry off", "ok"); ctx.go("settings"); } catch (err) { toast(errorText(err), "error"); }
+              } }), h("span", { class: "muted" }, tele.enabled ? `on · install id ${String(tele.install_id ?? "").slice(0, 8)}… · last sent ${tele.last_sent_day ?? "never"}${tele.endpoint ? "" : " · no endpoint configured yet, so nothing goes out"}` : "off (default). When on: one JSON document a day with counts and buckets — never a path, a name or any content.")),
+              preview)
+          : h("span", { class: "muted" }, "—"),
+      ),
+    );
+  }
+  renderDiag();
+
   main.append(
     h("div", { class: "page-head" }, h("h1", null, "Settings")),
     h(
@@ -222,6 +260,7 @@ export async function settingsView(main: HTMLElement, ctx: AppCtx) {
       h("div", { class: "card" }, h("h3", null, "AI adapter for “Ask”"), aiBox),
       h("div", { class: "card" }, h("h3", null, "Background agent"), agentBox, h("h3", { style: { marginTop: "16px" } }, "Search index"), modelBox, h("h3", { style: { marginTop: "16px" } }, "Updates"), updateBox),
     ),
+    h("div", { class: "card", style: { marginTop: "14px" } }, h("h3", null, "Feedback & diagnostics"), diagBox),
     h("div", { class: "card", style: { marginTop: "14px" } }, h("h3", null, "AI audit log"), h("p", { class: "muted", style: { fontSize: "12px", marginTop: "0" } }, "What was sent to which model. The text itself is never stored — only its size and a hash."), auditTable),
     !isTauri ? h("p", { class: "muted", style: { fontSize: "12px" } }, `Browser preview with mock data · ${date(Math.floor(Date.now() / 1000))}`) : h("span"),
   );

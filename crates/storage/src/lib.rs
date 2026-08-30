@@ -6,6 +6,7 @@ pub mod folderdups;
 pub mod inventory;
 pub mod journal;
 pub mod keyring;
+pub mod metrics;
 pub mod projects;
 pub mod rules;
 pub mod semantic;
@@ -45,6 +46,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/0006_semantic.sql"),
     ),
     ("0007_rules", include_str!("../migrations/0007_rules.sql")),
+    ("0008_beta", include_str!("../migrations/0008_beta.sql")),
 ];
 
 /// Default per-user database location:
@@ -346,14 +348,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 7);
+            assert_eq!(db.schema_version().unwrap(), 8);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
+        assert_eq!(db.schema_version().unwrap(), 8);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }

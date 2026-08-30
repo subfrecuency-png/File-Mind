@@ -69,6 +69,15 @@ Every scan is read-only on the scanned folder; the only thing written is the
 database under `~/Library/Application Support/FileMind/` (macOS) or
 `%LOCALAPPDATA%\FileMind\` (Windows). `roots remove` forgets the index only.
 
+## Site, telemetry, crash reports
+
+`site/` is the landing page and docs (static; `.github/workflows/pages.yml`
+publishes it to GitHub Pages — enable Pages → Source: GitHub Actions once).
+The design lives in the Figma file "FileMind — Site". Telemetry is opt-in and
+aggregate-only; the full document is `docs/TELEMETRY.md` and a test pins the
+field list to it. Crash reports are written locally and only leave the machine
+attached to feedback you send (Settings → Feedback & diagnostics).
+
 ## Core safety rules
 
 These are enforced in code and CI, not just documented:

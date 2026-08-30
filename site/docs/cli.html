@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI reference — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="active">CLI reference</a></aside><article class="prose">
+<h1>CLI reference</h1>
+<p>The <code>filemind</code> binary ships inside the app bundle (<code>FileMind.app/Contents/MacOS/filemind</code>); add it to your <code>PATH</code> or symlink it. When the agent is running, commands go through it; otherwise they work on the database directly.</p>
+<pre><code>filemind status                  # database, mode, roots, counts
+filemind roots add ~/Downloads   # register a folder
+filemind scan                    # read-only metadata scan
+filemind hash --minutes 5        # content hashes, throttled
+filemind search "offer sheet from last spring"
+filemind ask "which supplier quoted the lowest price per ton?"
+filemind note add ~/x.pdf "the one we accepted"
+filemind analyze                 # duplicates, versions, health, suggestions
+filemind health · dupes · versions · projects
+filemind suggest · suggest plan 12 · suggest apply 12
+filemind history · undo txn_…
+filemind mode observe|assist|automate
+filemind rule kinds|add|preview|arm|pause|rm|runs|tick
+filemind agent install|uninstall|start|stop|status
+filemind model status|download
+filemind ai status|set …
+filemind dev db-key              # the SQLCipher key for the sqlcipher shell</code></pre>
+<p>Every command has <code>--help</code>. Output that goes to a pipe (<code>| head</code>) ends cleanly.</p>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

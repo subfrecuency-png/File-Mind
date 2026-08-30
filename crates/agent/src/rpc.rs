@@ -334,6 +334,48 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
             let _slot = crate::jobs::heavy();
             Ok(json!(crate::rules::tick(ctx.adapter.as_ref(), &db)?))
         }
+        // ---- beta instrumentation (Phase 10) ------------------------------
+        "telemetry.get" => {
+            let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string();
+            Ok(json!({
+                "enabled": crate::telemetry::enabled(&db),
+                "endpoint": crate::telemetry::endpoint(&db),
+                "install_id": db.get_setting("telemetry.install_id")?,
+                "last_sent_day": db.get_setting("telemetry.last_sent_day")?,
+                "fields": crate::telemetry::FIELDS,
+                "preview": crate::telemetry::document(&db, &yesterday)?,
+            }))
+        }
+        "telemetry.set" => {
+            let on = p.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+            crate::telemetry::set_enabled(&db, on)?;
+            if let Some(ep) = p.get("endpoint").and_then(Value::as_str) {
+                db.set_setting("telemetry.endpoint", &json!(ep))?;
+            }
+            Ok(json!({"enabled": on}))
+        }
+        "crash.list" => Ok(json!(crate::crash::list()?)),
+        "crash.read" => {
+            let name = p
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("name required"))?;
+            Ok(json!({"name": name, "text": crate::crash::read(name)?}))
+        }
+        "crash.settle" => {
+            let name = p
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("name required"))?;
+            let state = p
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("dismissed");
+            crate::crash::settle(name, state)?;
+            Ok(json!({"settled": true}))
+        }
         "notes.add" => {
             let subject = p
                 .get("subject")

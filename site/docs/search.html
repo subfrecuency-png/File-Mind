@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search and Ask — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="active">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>Search and Ask</h1>
+<p>Type the way you would describe a file to a colleague: <code>the offer sheet for the calcium supplier from last spring, pdf</code>. FileMind parses the parts it can (kinds, dates, seasons, sizes, “in downloads”, “in project X”) into filters and matches the rest by words <em>and</em> by meaning, then fuses the two rankings. When the filters leave nothing, it retries without them and tells you so.</p>
+<h2>Words vs meaning</h2>
+<p>Lexical search covers names, paths and extracted text (FTS5). Semantic search embeds each file from its name, folder words, category and the first 2 KB of text with <code>bge-small-en-v1.5</code>, locally. The toggle in the search bar lets you see each side alone.</p>
+<h2>Notes</h2>
+<p>“the one we accepted, signed in May” — attach a note to any file or folder from a search hit. Notes are indexed both ways and show up as their own results.</p>
+<h2>Ask</h2>
+<p>⌘Enter turns the query into a question answered over the top hits by the adapter you chose in Settings: none (the default), Ollama on your Mac, or the Anthropic API. The answer lists its sources; the footer shows how many bytes were sent. Every call is recorded in the audit log with the adapter, model, purpose and size — never the text.</p>
+<div class="callout"><p>Ollama can serve hosted models (names ending in <code>:cloud</code>). FileMind labels those calls <strong>CLOUD</strong> in the audit log because the context leaves your machine even though Ollama itself is local.</p></div>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

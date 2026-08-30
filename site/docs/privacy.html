@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy and telemetry — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="active">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>Privacy and telemetry</h1>
+<h2>What stays on your Mac</h2>
+<p>Everything, by default: the index, content hashes, extracted text, the embedding model and its vectors, the transaction journal, the audit log and the database itself. The database is encrypted with SQLCipher; the key is a random 32-byte value in your login Keychain (<code>ai.filemind</code>). FileMind makes no network requests at all unless you enable one of the three things below.</p>
+<h2>1. AI adapters (off by default)</h2>
+<p>Ask sends a question plus context to the adapter you chose: file names, folders, dates and at most 2 KB of extracted text from the top hits. Never a whole file, never a path outside your chosen folders, never a file classified as sensitive (keys, <code>.env</code>, card or ID numbers). Every call is logged with adapter, model, purpose, byte count, latency and whether it left the machine. The text is not stored — only its size and a hash.</p>
+<h2>2. Update checks (on)</h2>
+<p>Settings → Updates fetches a small signed manifest from GitHub Releases when you press Check. It contains version numbers and download URLs; the request carries no identifier.</p>
+<h2>3. Telemetry (off by default, aggregate only)</h2>
+<p>If you switch it on in Settings, once a day the app sends one JSON document to the FileMind telemetry endpoint. The full schema lives in the repository at <code>docs/TELEMETRY.md</code> and is checked by a test; this is all of it:</p>
+<table><tr><th>Field</th><th>Example</th><th>Why</th></tr>
+<tr><td><code>schema</code></td><td>1</td><td>versioning</td></tr>
+<tr><td><code>install_id</code></td><td>random UUID, regenerated if you turn telemetry off and on</td><td>count installs, not people</td></tr>
+<tr><td><code>version</code>, <code>os</code>, <code>arch</code></td><td>0.2.0, macos 15.1, arm64</td><td>which builds crash</td></tr>
+<tr><td><code>health_bucket</code></td><td>"70-79"</td><td>is the score useful</td></tr>
+<tr><td><code>files_bucket</code></td><td>"100k-250k"</td><td>index sizes we must handle</td></tr>
+<tr><td><code>suggestions_applied</code>, <code>suggestions_undone</code>, <code>rules_armed</code>, <code>rule_runs</code></td><td>counts for the day</td><td>are suggestions trusted</td></tr>
+<tr><td><code>sessions</code>, <code>crash_free_sessions</code></td><td>3, 3</td><td>the beta goal (≥ 99 %)</td></tr>
+<tr><td><code>undo_failures</code></td><td>0</td><td>the other beta goal: zero data loss</td></tr>
+<tr><td><code>adapter</code></td><td>"none" / "ollama" / "cloud"</td><td>which adapters matter</td></tr></table>
+<p>No paths, no names, no content, no hashes of any of them, no IP retention on the receiving side beyond the request log's 24 hours.</p>
+<h2>Crash reports (you choose to send)</h2>
+<p>If the agent or the app panics, a report is written to <code>~/Library/Logs/FileMind/crashes/</code>: version, OS, the panic message and a stack trace with paths under your home folder replaced by <code>~</code>. Nothing is sent automatically. Settings → Feedback shows pending reports and lets you review one and send it.</p>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

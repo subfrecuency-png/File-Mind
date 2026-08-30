@@ -733,6 +733,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "ureq",
  "walkdir",
 ]
 

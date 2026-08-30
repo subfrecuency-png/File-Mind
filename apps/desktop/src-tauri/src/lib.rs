@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::State;
 
+pub struct SessionId(i64);
+
 #[derive(Default)]
 pub struct AppState {
     local: Mutex<Option<Arc<Context>>>,
@@ -374,9 +376,50 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// A pre-filled GitHub issue (or mailto) for feedback, optionally carrying a
+/// crash report. Built here so the version/build/OS lines are always right.
+#[tauri::command]
+fn feedback_url(kind: String, report: Option<String>) -> Result<String, String> {
+    let mut body = format!(
+        "**What happened**\n\n\n\n**What I expected**\n\n\n\n---\nFileMind {} · build {} · {} {}\n",
+        env!("CARGO_PKG_VERSION"),
+        filemind_agent::BUILD_ID,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    if let Some(name) = report {
+        let text = filemind_agent::crash::read(&name).map_err(|e| e.to_string())?;
+        let text: String = text.chars().take(6000).collect();
+        body.push_str("\n<details><summary>Crash report</summary>\n\n```\n");
+        body.push_str(&text);
+        body.push_str("\n```\n</details>\n");
+        let _ = filemind_agent::crash::settle(&name, "sent");
+    }
+    let title = match kind.as_str() {
+        "bug" => "Bug: ",
+        "crash" => "Crash: ",
+        _ => "Feedback: ",
+    };
+    let enc = |s: &str| {
+        let mut out = String::new();
+        for b in s.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    };
+    Ok(format!(
+        "https://github.com/subfrecuency/filemind/issues/new?title={}&body={}",
+        enc(title),
+        enc(&body)
+    ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    filemind_core::install_quiet_panic_hook();
+    filemind_agent::crash::install("desktop");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -384,6 +427,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
         .setup(|app| {
+            use tauri::Manager;
+            // beta instrumentation: one session per app run (counted as a crash
+            // by the next run if it never ends cleanly)
+            if let Ok(db) = db_path().and_then(|p| filemind_storage::Db::open(&p).map_err(|e| e.to_string())) {
+                if let Ok(id) = db.session_start("desktop") {
+                    app.manage(SessionId(id));
+                }
+            }
             autostart::refresh();
             if let Err(e) = setup_tray(app) {
                 eprintln!("tray icon unavailable: {e}");
@@ -408,8 +459,19 @@ pub fn run() {
             autostart_set,
             local_reset,
             update_check,
-            update_install
+            update_install,
+            feedback_url
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running FileMind");
+        .build(tauri::generate_context!())
+        .expect("error while building FileMind")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(s) = app.try_state::<SessionId>() {
+                    if let Ok(db) = db_path().and_then(|p| filemind_storage::Db::open(&p).map_err(|e| e.to_string())) {
+                        let _ = db.session_end(s.0);
+                    }
+                }
+            }
+        });
 }

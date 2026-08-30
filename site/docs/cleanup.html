@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suggestions and undo — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="active">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>Suggestions and undo</h1>
+<p>Analysis rebuilds duplicate groups, version chains, projects and the health score after every scan, and turns what it finds into suggestions. A suggestion is a proposal; nothing runs from it until you preview and apply it in <strong>Assist</strong> mode.</p>
+<h2>Kinds</h2>
+<table><tr><th>Kind</th><th>What it proposes</th><th>Tier</th></tr>
+<tr><td>Duplicate</td><td>Trash exact copies; keep the one in the most deliberate place with the cleanest name.</td><td>2</td></tr>
+<tr><td>Duplicate folder</td><td>A whole folder that is a byte-for-byte copy of another (<code>creditos-v1</code> of <code>creditos</code>), trashed as one step.</td><td>2</td></tr>
+<tr><td>Versions</td><td>Tuck <code>report_v1…v5</code> into a <em>report versions</em> folder beside the newest.</td><td>1</td></tr>
+<tr><td>Stale downloads</td><td>Move loose files untouched for 90+ days into <code>~/FileMind Archive/Downloads/&lt;year&gt;/&lt;month&gt;/</code>.</td><td>1</td></tr></table>
+<h2>Preview → apply</h2>
+<p>The preview lists every KEEP, MOVE and TRASH line with the exact paths, plus any problems (a file that changed since analysis, a destination that already exists). Apply runs the plan you saw — the transaction carries the previewed id and a fingerprint of its steps, so a plan that changed underneath you is refused rather than run.</p>
+<h2>Undo</h2>
+<p>History lists every transaction. Undo restores each step from the journal; a file edited after it was moved, or a destination that is now occupied, is left alone and reported rather than clobbered. For transactions that only trashed things the button reads <strong>Put back</strong>.</p>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

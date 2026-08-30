@@ -13,7 +13,7 @@ use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
-    filemind_core::install_quiet_panic_hook();
+    filemind_agent::crash::install("agent");
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -47,13 +47,18 @@ fn main() -> Result<()> {
         Err(e) => tracing::error!(error = %e, "recovery failed"),
     }
 
+    let session = db.session_start("agent").ok();
     let engine = Arc::new(filemind_agent::semantic::Engine::open(&db)?);
     if !engine.is_semantic() {
         tracing::warn!("embedding model not installed — search is lexical + hash fallback; run `filemind model download`");
     }
 
     if once {
-        return scheduler::run(adapter.as_ref(), &db, &engine, true);
+        let r = scheduler::run(adapter.as_ref(), &db, &engine, true);
+        if let Some(id) = session {
+            let _ = db.session_end(id);
+        }
+        return r;
     }
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -117,6 +122,9 @@ fn main() -> Result<()> {
     tracing::info!("stopping");
     let _ = watcher_thread.join();
     let _ = rpc_thread.join();
+    if let Some(id) = session {
+        let _ = db.session_end(id);
+    }
     Ok(())
 }
 

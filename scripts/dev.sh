@@ -12,7 +12,12 @@ cargo build --workspace
 sh scripts/build-sidecar.sh --debug
 sleep 1
 ./target/debug/filemind agent install
-sleep 3
+# the agent loads the vector index before it opens its socket; give it time
+i=0
+until ./target/debug/filemind agent status 2>/dev/null | grep -q '^running'; do
+  i=$((i+1)); [ "$i" -ge 30 ] && break
+  sleep 1
+done
 ./target/debug/filemind agent status
 echo
 echo "agent restarted on the current build. If the app is running, restart it too:"

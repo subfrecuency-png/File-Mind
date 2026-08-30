@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automate mode — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="active">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>Automate mode</h1>
+<p>Automate lets a small allow-list of rules run without asking each time. The allow-list is code, not configuration; only these three kinds exist, and each has bounded parameters:</p>
+<table><tr><th>Rule</th><th>What it does</th><th>Bounds</th></tr>
+<tr><td><code>archive_stale_downloads</code></td><td>Move loose files sitting directly in Downloads, untouched for N days, into the dated archive.</td><td>N ≥ 30; ≤ 500 per run; hidden files and subfolders never</td></tr>
+<tr><td><code>collapse_versions</code></td><td>Tuck older versions with explicit markers (<code>v2</code>, <code>copy</code>, <code>final</code>) into a versions folder.</td><td>chain untouched ≥ 7 days; bare-number series left alone</td></tr>
+<tr><td><code>trash_exact_duplicates</code></td><td>Trash exact copies in Downloads whose kept copy lives elsewhere and is verified present.</td><td>≥ 64 KB; untouched ≥ 7 days</td></tr></table>
+<h2>The preview week</h2>
+<p>A new rule starts in <strong>preview</strong>. Every agent tick it records a dry run — the exact list it would have moved — and the Automate screen shows “in the last 7 days this rule would have moved N files”. Only after seven days, and at least one dry run, can it be <strong>armed</strong>.</p>
+<h2>When it runs</h2>
+<p>An armed rule executes only while the mode is Automate, as a normal journaled transaction with the rule as initiator. It appears in History and can be undone like anything else. Any validation problem, failed step, or a plan larger than the rule's <code>pause_above</code> pauses the rule with the reason; arming again is a deliberate act.</p>
+<div class="callout"><p>Backlog first, rule second: if hundreds of files qualify, apply the Assist-mode <em>Stale downloads</em> suggestion once (one reviewable transaction), then let the rule keep the folder tidy at 50 files a run.</p></div>
+<h2>From the terminal</h2>
+<pre><code>filemind rule kinds
+filemind rule add archive_stale_downloads --set older_than_days=120
+filemind rule                     # what each rule would have done
+filemind rule preview 1           # right now, touches nothing
+filemind rule arm 1               # after the preview week
+filemind mode automate</code></pre>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

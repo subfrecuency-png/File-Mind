@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The six rules — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="active">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>The six rules</h1>
+<p>These are the constraints FileMind is built around. Each one is enforced in code, and where it can be, in CI — so a change that would break one fails the build.</p>
+<h2>1. Never delete permanently</h2><p><code>OsAdapter::move_to_trash</code> is the only deletion primitive. A CI lint fails if <code>fs::remove_*</code> appears in the core, agent or CLI crates outside FileMind's own control files.</p>
+<h2>2. Never mass-move without a manifest</h2><p>The transaction manager is the only path to the file-system adapter. A manifest is written and fsynced before step one; every step's state is journaled; an interrupted transaction is recovered on the next start.</p>
+<h2>3. Never overwrite</h2><p>Moves refuse existing destinations. Chaos tests execute a transaction with a simulated crash at every possible point and assert that every original file exists exactly once afterwards.</p>
+<h2>4. Never silently rename</h2><p>Every rename is a visible step in the plan; apply checks the plan's fingerprint against the preview you approved.</p>
+<h2>5. Never follow unknown links</h2><p>Symlinks and junctions are recorded and never traversed; anything outside the approved roots is never read or moved.</p>
+<h2>6. Never touch the OS or app internals</h2><p>A protected-roots list (system folders, <code>/Applications</code>, <code>~/Library</code>, <code>.Trash</code>) is applied at the scanner, the planner and the adapter.</p>
+<div class="callout"><p>Automate mode adds a seventh, procedural rule: an unattended action is allowed only after a week of previews, capped per run, and paused on the first conflict. See <a href="automate.html" style="color:var(--cyan)">Automate mode</a>.</p></div>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>

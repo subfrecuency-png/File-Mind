@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started — File Mind AI/OS docs</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../site.css"></head>
+<body><div class="wrap">
+<nav class="nav"><a class="brand" href="../"><img src="../assets/favicon.png" alt=""> File Mind <b>AI/OS</b></a>
+<div class="links"><a href="../#how">How it works</a><a href="../#safety">Safety</a><a href="../#privacy">Privacy</a><a href="./">Docs</a></div>
+<a class="btn primary small" href="../#beta">Join the beta</a></nav>
+<div class="doc"><aside><div class="group">Start</div><a href="index.html" class="active">Getting started</a><a href="search.html" class="">Search and Ask</a><a href="cleanup.html" class="">Suggestions and undo</a><div class="group">Trust</div><a href="rules.html" class="">The six rules</a><a href="automate.html" class="">Automate mode</a><a href="privacy.html" class="">Privacy and telemetry</a><div class="group">Project</div><a href="changelog.html" class="">Changelog</a><a href="cli.html" class="">CLI reference</a></aside><article class="prose">
+<h1>Getting started</h1>
+<p>FileMind is a menu-bar app for macOS 14 and newer with a background agent and a command-line tool. Everything runs on your Mac; the only thing it writes outside the folders you choose is its own database in <code>~/Library/Application Support/FileMind/</code>.</p>
+<h2>Install</h2>
+<p>Download the <code>.dmg</code> from the beta invite, drag FileMind to Applications and open it. The first launch asks for the folders you want indexed — Downloads, Documents, Desktop and Pictures are suggested — and which mode to start in. <strong>Observe</strong> is the default: it indexes and suggests, and never moves a file.</p>
+<div class="callout"><p>The app bundles the agent and the <code>filemind</code> CLI. Settings → Background agent → <strong>Start at login</strong> registers the agent with launchd so it keeps the index current while you are logged in.</p></div>
+<h2>The first hour</h2>
+<p>The agent scans metadata first (fast), then hashes contents at a throttled pace, then classifies files and extracts text for search. On a 190,000-file home folder the scan takes about a minute; hashing and classification run in the background at roughly a fifth of one core. The Overview shows progress and a health score that sharpens as the index fills in.</p>
+<h2>Search index</h2>
+<p>Search works from the first scan on names and paths. Search <em>by meaning</em> needs the local embedding model (bge-small, 133 MB): Settings → Search index → <strong>Download model</strong>. It is fetched once from Hugging Face and never sent anywhere.</p>
+<h2>Where things live</h2>
+<table><tr><th>What</th><th>Where</th></tr>
+<tr><td>Database (encrypted)</td><td><code>~/Library/Application Support/FileMind/filemind.db</code></td></tr>
+<tr><td>Database key</td><td>Login Keychain, item <code>ai.filemind</code></td></tr>
+<tr><td>Embedding model</td><td><code>~/Library/Application Support/FileMind/models/</code></td></tr>
+<tr><td>Agent logs</td><td><code>~/Library/Logs/FileMind/agent.log</code></td></tr>
+<tr><td>Archived downloads</td><td><code>~/FileMind Archive/</code> (only if you apply that suggestion)</td></tr>
+<tr><td>Login item</td><td><code>~/Library/LaunchAgents/ai.filemind.agent.plist</code></td></tr></table>
+<h2>Uninstall</h2>
+<p>Settings → Background agent → turn off Start at login, quit from the menu bar, move FileMind.app to the Trash, and delete the folder above if you want the index gone. Nothing else is touched; anything FileMind moved is still where History says it is, or in your Trash.</p>
+</article></div>
+<footer><span>© 2026 File Mind AI/OS</span><nav><a href="./">Docs</a><a href="privacy.html">Privacy</a><a href="changelog.html">Changelog</a><a href="https://github.com/subfrecuency/filemind">GitHub</a><a href="mailto:subfrecuency@gmail.com?subject=FileMind%20feedback">Feedback</a></nav></footer>
+</div></body></html>
