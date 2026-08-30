@@ -47,3 +47,24 @@ pub enum CoreError {
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
+
+/// Replace the default panic message (which dumps the whole payload — for a
+/// malformed PDF that is the font dictionary) with one short line. Panics
+/// from third-party parsers are caught at the call site; this only changes
+/// what gets printed on the way.
+pub fn install_quiet_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into());
+        let msg: String = msg.chars().take(160).collect();
+        let loc = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!("warning: internal panic caught{loc}: {msg}");
+    }));
+}

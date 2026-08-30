@@ -440,6 +440,7 @@ fn human_bytes(b: u64) -> String {
 }
 
 fn main() {
+    filemind_core::install_quiet_panic_hook();
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);

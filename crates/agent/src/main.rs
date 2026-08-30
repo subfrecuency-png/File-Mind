@@ -13,6 +13,7 @@ use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
+    filemind_core::install_quiet_panic_hook();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
