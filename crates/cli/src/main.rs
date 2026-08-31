@@ -160,6 +160,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ShrinkCmd,
     },
+    /// Cold-project archives: list, inspect, verify and restore.
+    Archive {
+        #[command(subcommand)]
+        cmd: ArchiveCmd,
+    },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -291,6 +296,27 @@ enum ShrinkCmd {
     },
     /// What one file looks like on disk: compressed or not, bytes used.
     Info { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum ArchiveCmd {
+    /// Every archive: id, project, size on disk vs original, state.
+    List,
+    /// One archive's members.
+    Show { id: String },
+    /// Decode every member and check it against its recorded hash.
+    Verify { id: String },
+    /// Extract the whole archive (or one member) back to disk, hash-verified.
+    /// Never overwrites an existing file.
+    Restore {
+        id: String,
+        /// A single member (path inside the archive) instead of everything.
+        #[arg(long)]
+        member: Option<String>,
+        /// Restore somewhere other than the original folder.
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -520,7 +546,7 @@ fn print_search(v: &Value) {
             .unwrap_or_default();
         println!("{:>3}  {}", i + 1, h["path"].as_str().unwrap_or("?"));
         println!(
-            "     {}  {:>9}  {}{}  via {}",
+            "     {}  {:>9}  {}{}{}  via {}",
             fmt_ts(h["mtime"].as_i64().unwrap_or(0)),
             human_bytes(h["size"].as_u64().unwrap_or(0)),
             h["category"].as_str().unwrap_or("-"),
@@ -529,6 +555,13 @@ fn print_search(v: &Value) {
             } else {
                 ""
             },
+            h["location"]
+                .as_str()
+                .and_then(filemind_core::shrink::archive::parse_location)
+                .map(|(id, _)| format!(
+                    "  ⦿ in archive {id} — `filemind archive restore {id} --member <path>`"
+                ))
+                .unwrap_or_default(),
             via.join(", ")
         );
     }
@@ -1442,6 +1475,9 @@ fn run() -> Result<()> {
                         json!({"id": id, "approved": true, "txn_id": txn_id, "fingerprint": fp}),
                     )?
                 } else {
+                    eprintln!(
+                        "agent not running — applying in this process; let it finish (an interrupted run is settled by recovery, but finished is better)"
+                    );
                     let (_, db) = open_db()?;
                     json!(filemind_agent::actions::apply(
                         adapter.as_ref(),
@@ -1982,7 +2018,7 @@ fn run() -> Result<()> {
                     }
                 }
                 println!();
-                println!("Nothing was changed. Tier 1 arrives as `compress_cold_text` suggestions after the next analyze (`filemind suggest`); tiers 2–3 are not built yet.");
+                println!("Nothing was changed. Tiers 1 and 3 arrive as `compress_cold_text` and `archive_cold_project` suggestions after the next analyze (`filemind suggest`); tier 2 is not built yet.");
             }
             ShrinkCmd::Info { path } => {
                 let path = path.canonicalize().unwrap_or(path);
@@ -2031,6 +2067,68 @@ fn run() -> Result<()> {
                         Some(None) => "indexed, no rewrite recorded".to_string(),
                         Some(Some(m)) => format!("indexed, rewritten with {m} by FileMind"),
                     }
+                );
+            }
+        },
+
+        Cmd::Archive { cmd } => match cmd {
+            ArchiveCmd::List => {
+                let v = rpc(adapter.as_ref(), "archive.list", json!({}))?;
+                let list = v.as_array().cloned().unwrap_or_default();
+                if list.is_empty() {
+                    println!("no archives yet — cold projects appear in `filemind suggest` after an estimate");
+                }
+                for a in list {
+                    println!(
+                        "{}  {:>9} → {:>9} on disk  {:>5} members  {}  {}",
+                        a["archive_id"].as_str().unwrap_or("?"),
+                        human_bytes(a["bytes_raw"].as_u64().unwrap_or(0)),
+                        human_bytes(a["bytes_stored"].as_u64().unwrap_or(0)),
+                        a["members"].as_u64().unwrap_or(0),
+                        a["state"].as_str().unwrap_or("?"),
+                        a["name"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            ArchiveCmd::Show { id } => {
+                let v = rpc(adapter.as_ref(), "archive.show", json!({"id": id}))?;
+                let a = &v["archive"];
+                println!(
+                    "{}  {}\n  from {}\n  pack {}\n  {} → {} on disk, {} members, {}",
+                    a["archive_id"].as_str().unwrap_or("?"),
+                    a["name"].as_str().unwrap_or(""),
+                    a["folder"].as_str().unwrap_or("?"),
+                    a["pack_path"].as_str().unwrap_or("?"),
+                    human_bytes(a["bytes_raw"].as_u64().unwrap_or(0)),
+                    human_bytes(a["bytes_stored"].as_u64().unwrap_or(0)),
+                    a["members"].as_u64().unwrap_or(0),
+                    a["state"].as_str().unwrap_or("?")
+                );
+                for m in v["members"].as_array().cloned().unwrap_or_default() {
+                    if m["kind"] == "file" {
+                        println!(
+                            "  {:>9}  {}",
+                            human_bytes(m["size"].as_u64().unwrap_or(0)),
+                            m["rel"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+            }
+            ArchiveCmd::Verify { id } => {
+                rpc(adapter.as_ref(), "archive.verify", json!({"id": id}))?;
+                println!("ok: every member decodes to its recorded hash");
+            }
+            ArchiveCmd::Restore { id, member, to } => {
+                let v = rpc(
+                    adapter.as_ref(),
+                    "archive.restore",
+                    json!({"id": id, "member": member, "to": to}),
+                )?;
+                println!(
+                    "restored {} file(s), {} → {}",
+                    v["files"].as_u64().unwrap_or(0),
+                    human_bytes(v["bytes"].as_u64().unwrap_or(0)),
+                    v["to"].as_str().unwrap_or("?")
                 );
             }
         },

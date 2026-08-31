@@ -711,6 +711,39 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
                 .ok_or_else(|| anyhow::anyhow!("id required"))?;
             Ok(json!(crate::actions::undo(ctx.adapter.as_ref(), &db, id)?))
         }
+        "archive.list" => Ok(json!(db.archives()?)),
+        "archive.show" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let a = db
+                .archive(id)?
+                .ok_or_else(|| anyhow::anyhow!("unknown archive {id}"))?;
+            Ok(json!({"archive": a, "members": db.archive_members(id)?}))
+        }
+        "archive.verify" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            crate::archive::verify(&db, id)?;
+            Ok(json!({"ok": true}))
+        }
+        "archive.restore" => {
+            let id = p
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("id required"))?;
+            let member = p.get("member").and_then(Value::as_str);
+            let to = p.get("to").and_then(Value::as_str).map(PathBuf::from);
+            Ok(json!(crate::archive::restore(
+                &db,
+                id,
+                member,
+                to.as_deref()
+            )?))
+        }
         "txn.recover" => Ok(json!(crate::actions::recover_all(
             ctx.adapter.as_ref(),
             &db

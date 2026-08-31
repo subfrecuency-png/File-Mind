@@ -7,7 +7,7 @@ interface List { proposed: number; est_bytes: number; items: Suggestion[] }
 interface Plan { txn_id: string; steps: number; diff: string; problems: string[]; risk_tier: number; mode: string; fingerprint: string }
 interface Applied { txn_id: string; done: number; failed: number; state: string }
 
-const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", trash_duplicate_folder: "Duplicate folder", collapse_versions: "Versions", stale_downloads: "Stale downloads", compress_cold_text: "Shrink" };
+const KIND_LABEL: Record<string, string> = { trash_duplicates: "Duplicate", trash_duplicate_folder: "Duplicate folder", collapse_versions: "Versions", stale_downloads: "Stale downloads", compress_cold_text: "Shrink", archive_cold_project: "Archive" };
 
 /** Colour the plan's KEEP / TRASH / MOVE / SHRINK lines. */
 export function renderDiff(diff: string): HTMLElement {
@@ -92,6 +92,8 @@ export async function approvalsView(main: HTMLElement, ctx: AppCtx) {
         ...plan.problems.map((p) => h("div", { class: "problem" }, p)),
         h("p", { class: "muted", style: { fontSize: "12px" } }, s.kind === "compress_cold_text"
           ? "Shrink rewrites each file in place with APFS transparent compression: same file, same contents to every app, fewer bytes on disk. Each file is read back and checked against its hash before the step counts as done; undo from History puts the plain copy back in place."
+          : s.kind === "archive_cold_project"
+          ? "The project is packed into a compressed archive first, and every file in the pack is decoded and checked against its hash before this one step — the original folder going to Trash — runs. Search still finds every file inside the archive; restore any of them from Search or with `filemind archive restore`. Undo from History puts the folder back from the Trash."
           : "Trashed files go to the Trash; moves never overwrite. The whole transaction is journaled first and can be undone from History, with every file's contents verified before it is put back."),
       );
       const actions = h(

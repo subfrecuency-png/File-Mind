@@ -11,9 +11,7 @@ use filemind_storage::{Db, Suggestion};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-fn archive_root(home: &Path) -> PathBuf {
-    home.join("FileMind Archive")
-}
+use crate::archive::archive_root;
 
 fn home_dir() -> Result<PathBuf> {
     directories::BaseDirs::new()
@@ -150,6 +148,17 @@ pub fn plan_suggestion(db: &Db, s: &Suggestion) -> Result<Manifest> {
                 });
             }
         }
+        "archive_cold_project" => {
+            // the archive itself is built during apply (it only writes
+            // FileMind's own pack file); the transaction is the one
+            // user-visible mutation — the original tree going to Trash
+            let folder = PathBuf::from(s.subject["folder"].as_str().unwrap_or_default());
+            m.steps.push(Step::Trash {
+                path: folder,
+                hash_before: None,
+                trashed_to: None,
+            });
+        }
         other => bail!("cannot plan suggestion kind {other}"),
     }
     if m.steps.is_empty() {
@@ -198,6 +207,9 @@ pub struct Plan {
 }
 
 pub fn plan(adapter: &dyn OsAdapter, db: &Db, suggestion_id: i64) -> Result<(Manifest, Plan)> {
+    // a transaction another process left unfinished must be settled before
+    // anything new is planned against the same files
+    recover_all(adapter, db)?;
     let s = db
         .list_suggestions("proposed", usize::MAX)?
         .into_iter()
@@ -208,7 +220,11 @@ pub fn plan(adapter: &dyn OsAdapter, db: &Db, suggestion_id: i64) -> Result<(Man
     // the archive lives in the home folder; allow it as a destination
     let mut allowed = roots.clone();
     allowed.push(archive_root(&home_dir()?));
-    let problems = txn::validate(adapter, &allowed, &mut m)?;
+    let mut problems = txn::validate(adapter, &allowed, &mut m)?;
+    if s.kind == "archive_cold_project" {
+        let folder = PathBuf::from(s.subject["folder"].as_str().unwrap_or_default());
+        problems.extend(crate::archive::preflight(db, &folder)?);
+    }
     let plan = Plan {
         txn_id: m.txn_id.clone(),
         steps: m.steps.len(),
@@ -260,11 +276,37 @@ pub fn apply(
     if let Err(why) = txn::permitted(m.mode, &m, approved) {
         bail!("{why}");
     }
+    // Cold archives: pack and verify BEFORE the transaction touches the
+    // original tree. A failure here leaves everything exactly as it was.
+    let mut archived: Option<(String, PathBuf)> = None;
+    if let Some(s) = db
+        .list_suggestions("proposed", usize::MAX)?
+        .into_iter()
+        .find(|s| s.id == suggestion_id)
+    {
+        if s.kind == "archive_cold_project" {
+            let folder = PathBuf::from(s.subject["folder"].as_str().unwrap_or_default());
+            let name = s.subject["name"].as_str().unwrap_or("project").to_string();
+            let project_id = s.subject["project_id"].as_i64();
+            let b = crate::archive::build(db, &folder, &name, project_id, |done, total| {
+                tracing::info!(done, total, "archiving");
+            })?;
+            db.archive_set_txn(&b.archive_id, &m.txn_id)?;
+            archived = Some((b.archive_id, folder));
+        }
+    }
     let rep = txn::execute(adapter, db, &mut m, CrashPoint::Never)?;
     let (m2, state, states) = db.load_txn(&m.txn_id)?.context("transaction vanished")?;
     // executed manifest carries trashed_to; prefer it for effects
     db.note_txn_effects(&m, &states)?;
     let _ = m2;
+    if let Some((archive_id, folder)) = archived {
+        if rep.failed == 0 {
+            // rows the Trash step marked `trashed` become `archived`, so
+            // search keeps finding them inside the pack
+            db.mark_archived(&archive_id, &folder)?;
+        }
+    }
     if rep.failed == 0 {
         db.set_suggestion_state(suggestion_id, "accepted")?;
     }
@@ -284,6 +326,9 @@ pub struct Undone {
 }
 
 pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
+    // an interrupted transaction is settled here rather than telling the
+    // user to "recover first" with no verb that does it
+    recover_all(adapter, db)?;
     let rep = txn::undo(adapter, db, txn_id)?;
     // reverse the inventory effects for restored steps
     if let Some((m, _, states)) = db.load_txn(txn_id)? {
@@ -336,6 +381,21 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
                     )?;
                 }
             }
+        }
+    }
+    // an undone archive transaction: the tree is back from Trash, so its
+    // rows stop pointing into the pack (the pack itself is kept — it is
+    // only ever redundant, never authoritative while the tree exists)
+    {
+        let ids: Vec<String> = {
+            let mut st = db
+                .conn
+                .prepare("SELECT archive_id FROM archives WHERE txn_id = ?1")?;
+            let rows = st.query_map([txn_id], |r| r.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for id in ids {
+            db.mark_unarchived(&id)?;
         }
     }
     if !rep.skipped.is_empty() {

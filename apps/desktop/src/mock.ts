@@ -28,6 +28,9 @@ const suggestions: Record<string, unknown>[] = [
   { id: 4102, kind: "compress_cold_text", risk_tier: 1, est_bytes: 1_370_000_000, state: "proposed",
     subject: { root: `${HOME}/Downloads`, bucket: "code", ratio: 0.28, method: "apfs", files: [`${HOME}/Downloads/creditos-v1/src/ledger.ts`, `${HOME}/Downloads/creditos-v1/src/api.ts`, `${HOME}/Downloads/creditos-v1/package-lock.json`], bytes: 1_900_000_000, total_files: 38_000, total_bytes: 1_900_000_000 },
     rationale: "500 code files (412.0 MB) untouched for 30+ days in Downloads could take about 296.6 MB less space with APFS transparent compression. They stay exactly the same to every app; reversible in place. (37,500 more qualify; they come in the next batch.)" },
+  { id: 4201, kind: "archive_cold_project", risk_tier: 1, est_bytes: 730_000_000, state: "proposed",
+    subject: { project_id: 17, name: "SaberBattle 5", folder: `${HOME}/Downloads/SaberBattle 5`, files: 6_362, bytes: 5_700_000_000, saving: 730_000_000 },
+    rationale: "SaberBattle 5 has not been touched in 7 months — pack it (5.7 GB in 6,362 files) into a verified compressed archive, reclaiming about 730.0 MB. Search still finds every file inside; restore is one command. The original goes to Trash only after every file in the archive is decoded and checked." },
   { id: 3859, kind: "stale_downloads", risk_tier: 1, est_bytes: 34_000_000_000, state: "proposed",
     subject: { root: `${HOME}/Downloads`, older_than_days: 90 },
     rationale: "1,204 items in Downloads untouched for over 90 days (34.0 GB) — archive them into ~/FileMind Archive/Downloads by month." },
@@ -51,6 +54,7 @@ const files = [
   { file_id: "1:4", path: `${HOME}/Documents/Legal/lease apartment 2024.pdf`, name: "lease apartment 2024.pdf", ext: "pdf", size: 400_000, mtime: now - 700 * day, category: "contract", sensitive: false, status: "present" },
   { file_id: "1:5", path: `${HOME}/Downloads/secrets.env`, name: "secrets.env", ext: "env", size: 900, mtime: now - 3 * day, category: "code", sensitive: true, status: "present" },
   { file_id: "1:6", path: `${HOME}/Pictures/Screenshots/Screenshot 2026-08-28 at 10.14.32.png`, name: "Screenshot 2026-08-28 at 10.14.32.png", ext: "png", size: 2_300_000, mtime: now - 2 * day, category: "screenshot", sensitive: false, status: "present" },
+  { file_id: "1:7", path: `${HOME}/Downloads/SaberBattle 5/Assets/Scripts/SaberController.cs`, name: "SaberController.cs", ext: "cs", size: 41_000, mtime: now - 220 * day, category: "code", sensitive: false, status: "archived", location: "archive:arc_mock#Assets/Scripts/SaberController.cs" },
 ];
 
 function sleep(ms: number) {
@@ -245,6 +249,9 @@ export async function mockRpc(method: string, p: Record<string, unknown>): Promi
         (sub.trash as string[]).forEach((t, i) => { diff += `${String(i).padStart(3)}  TRASH  ${t}\n`; steps++; });
       } else if (s.kind === "compress_cold_text") {
         (sub.files as string[]).forEach((f, i) => { diff += `${String(i).padStart(3)}  SHRINK ${f}\n       apfs   ${[1.2, 0.8, 2.1][i] ?? 1} MB → ~${[340, 220, 590][i] ?? 300} KB on disk\n`; steps++; });
+      } else if (s.kind === "archive_cold_project") {
+        diff += `  0  TRASH  ${sub.folder}\n       (after packing 6,362 files into ${HOME}/FileMind Archive/Projects/SaberBattle 5 (arc_mock).fmpack and verifying every one)\n`;
+        steps = 1;
       } else if (s.kind === "collapse_versions") {
         diff += `     KEEP   ${sub.keep}\n`;
         (sub.older as string[]).forEach((t, i) => { diff += `${String(i).padStart(3)}  MOVE   ${t}\n       →      ${HOME}/Documents/Pitch/creditos deck versions/${t.split("/").pop()}\n`; steps++; });
@@ -294,6 +301,13 @@ export async function mockRpc(method: string, p: Record<string, unknown>): Promi
       return { answer: "The most recent offer sheet is [1] OFFER SHEET Calcium.pdf in Downloads (modified about four months ago); the supplier named in it is Nordkalk trading. A note on that file says it was the accepted one, signed in May.",
         adapter: ai.adapter === "ollama" ? "ollama-cloud" : ai.adapter, local: ai.adapter === "none", bytes_sent: 1802,
         hits: files.slice(0, 3).map((f, i) => ({ ...f, score: 0.03, via: ["lexical#" + (i + 1)] })) };
+    case "archive.list":
+      return [{ archive_id: "arc_mock", name: "SaberBattle 5", folder: `${HOME}/Downloads/SaberBattle 5`, pack_path: `${HOME}/FileMind Archive/Projects/SaberBattle 5 (arc_mock).fmpack`, created_ts: now - 3 * day, bytes_raw: 5_700_000_000, bytes_stored: 4_970_000_000, members: 6_362, state: "ready", txn_id: "txn_mock_arc" }];
+    case "archive.restore": {
+      const f = files.find((x) => x.location === `archive:${p.id}#${p.member}`);
+      if (f) { f.status = "present"; delete (f as Record<string, unknown>).location; }
+      return { files: 1, bytes: f?.size ?? 0, to: f?.path ?? "" };
+    }
     case "notes.add": {
       const n = { note_id: nextNote++, subject_type: p.kind ?? "file", subject_id: p.subject, text: p.text, source: "user", ts: now };
       notes.unshift(n);

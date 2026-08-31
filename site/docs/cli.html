@@ -27,6 +27,10 @@ filemind mode observe|assist|automate
 filemind rule kinds|add|preview|arm|pause|rm|runs|tick
 filemind shrink estimate         # what lossless compression could reclaim; reads only
 filemind shrink info <path>      # compressed? bytes on disk?
+filemind archive list            # cold-project archives and their savings
+filemind archive show <id>       # what is inside one archive
+filemind archive verify <id>     # decode every member, check every hash
+filemind archive restore <id> [--member <path>] [--to <dir>]   # bring files back, hash-verified
 filemind agent install|uninstall|start|stop|status
 filemind model status|download
 filemind ai status|set …

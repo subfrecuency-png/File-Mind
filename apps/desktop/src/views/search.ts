@@ -2,7 +2,7 @@ import type { AppCtx } from "../main";
 import { reveal, rpc, openPath } from "../api";
 import { ago, bytes, button, clear, errorText, h, parentDir, pill, shortPath, spinner, toast } from "../ui";
 
-interface Hit { file_id: string; path: string; name: string; size: number; mtime: number; category: string | null; sensitive: boolean; score: number; via: string[] }
+interface Hit { file_id: string; path: string; name: string; size: number; mtime: number; category: string | null; sensitive: boolean; score: number; via: string[]; location?: string | null }
 interface Note { note_id: number; subject_id: string; text: string; ts: number }
 interface SearchResult { query: string; parsed: { text: string; notes: string[] }; semantic: boolean; hits: Hit[]; notes: Note[]; elapsed_ms: number }
 interface Answer { answer: string; adapter: string; local: boolean; bytes_sent: number; hits: Hit[] }
@@ -25,7 +25,28 @@ export async function searchView(main: HTMLElement, ctx: AppCtx) {
   }
   renderSeg();
 
+  /** "archive:<id>#<rel>" → [id, rel]; null for a plain present file. */
+  function inArchive(hit: Hit): [string, string] | null {
+    if (!hit.location || !hit.location.startsWith("archive:")) return null;
+    const rest = hit.location.slice("archive:".length);
+    const at = rest.indexOf("#");
+    return at < 0 ? null : [rest.slice(0, at), rest.slice(at + 1)];
+  }
+
+  async function restoreMember(hit: Hit) {
+    const arc = inArchive(hit);
+    if (!arc) return;
+    try {
+      await rpc("archive.restore", { id: arc[0], member: arc[1] });
+      toast(`Restored ${hit.name} to its original place`, "ok");
+      run();
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  }
+
   function hitRow(hit: Hit, i: number) {
+    const arc = inArchive(hit);
     return h(
       "div",
       { class: "hit" },
@@ -33,11 +54,13 @@ export async function searchView(main: HTMLElement, ctx: AppCtx) {
       h(
         "div",
         null,
-        h("div", { class: "name" }, hit.name, hit.sensitive ? [" ", pill("sensitive", "sensitive")] : null),
+        h("div", { class: "name" }, hit.name, hit.sensitive ? [" ", pill("sensitive", "sensitive")] : null, arc ? [" ", pill("in archive", "archive")] : null),
         h("div", { class: "path muted", title: hit.path }, shortPath(parentDir(hit.path))),
         h("div", { class: "meta" }, h("span", null, ago(hit.mtime)), h("span", null, bytes(hit.size)), hit.category ? h("span", null, hit.category) : null, h("span", { class: "via" }, hit.via.join(" · "))),
       ),
-      h("div", { class: "row" }, button("Reveal", () => reveal(hit.path), { small: true }), button("Open", () => openPath(hit.path), { small: true }), button("Note", () => addNote(hit.path), { small: true, kind: "ghost" })),
+      arc
+        ? h("div", { class: "row" }, button("Restore", () => restoreMember(hit), { small: true }), button("Note", () => addNote(hit.path), { small: true, kind: "ghost" }))
+        : h("div", { class: "row" }, button("Reveal", () => reveal(hit.path), { small: true }), button("Open", () => openPath(hit.path), { small: true }), button("Note", () => addNote(hit.path), { small: true, kind: "ghost" })),
     );
   }
 

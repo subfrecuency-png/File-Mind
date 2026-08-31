@@ -18,6 +18,7 @@
 //! This module holds the estimator (`estimate`). The rewrite steps come in
 //! their own modules, each as a journaled, verified, undoable transaction.
 
+pub mod archive;
 pub mod estimate;
 
 pub use estimate::{Estimate, Estimator, FileIn, Probe, ProjectIn};

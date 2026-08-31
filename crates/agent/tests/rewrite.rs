@@ -401,6 +401,41 @@ fn crash_at_every_point_settles_without_conflicts() {
     }
 }
 
+/// A ^C in the middle of an in-process apply leaves the transaction
+/// `running`. `undo` (and `plan`) must settle it themselves instead of
+/// erroring with "recover it first" — the user has no recover verb.
+#[test]
+fn undo_recovers_an_unfinished_transaction_first() {
+    let adapter = SimAdapter::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("root");
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.log");
+    let b = dir.join("b.log");
+    std::fs::write(&a, text(500, "a")).unwrap();
+    std::fs::write(&b, text(700, "b")).unwrap();
+    let db = Db::open_in_memory().unwrap();
+    let mut m = Manifest::new(Mode::Assist, Initiator::User, RiskTier::Tier1, "shrink");
+    m.steps.push(rewrite_step(&a));
+    m.steps.push(rewrite_step(&b));
+    assert!(txn::validate(&adapter, std::slice::from_ref(&dir), &mut m)
+        .unwrap()
+        .is_empty());
+    // the process dies after step 0 — what a ^C mid-apply leaves behind
+    assert!(txn::execute(&adapter, &db, &mut m, CrashPoint::BeforeOp(1)).is_err());
+    assert!(!db.unfinished().unwrap().is_empty());
+    assert_eq!(adapter.state_of(&a), RewriteState::Rewritten);
+
+    // no separate recovery step: undo settles the journal itself
+    let u = actions::undo(&adapter, &db, &m.txn_id).unwrap();
+    assert_eq!(u.restored, 1, "skipped: {:?}", u.skipped);
+    assert!(u.skipped.is_empty());
+    assert!(db.unfinished().unwrap().is_empty());
+    assert_eq!(adapter.state_of(&a), RewriteState::Original);
+    assert_eq!(adapter.state_of(&b), RewriteState::Original);
+    assert_eq!(std::fs::read(&a).unwrap(), text(500, "a"));
+}
+
 #[test]
 fn compress_suggestion_flows_from_estimate_to_undo() {
     std::env::set_var("FILEMIND_SHRINK_ANYWHERE", "1");

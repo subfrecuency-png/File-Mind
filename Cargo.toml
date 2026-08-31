@@ -40,6 +40,7 @@ libc = "0.2"
 pdf-extract = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 zstd = "0.13"
+fastcdc = { version = "3", default-features = false }
 flate2 = "1"
 
 [profile.release]

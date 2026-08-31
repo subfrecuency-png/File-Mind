@@ -7,6 +7,7 @@ pub const BUILD_ID: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FILEMIN
 
 pub mod actions;
 pub mod analysis;
+pub mod archive;
 pub mod classifier;
 pub mod crash;
 pub mod fixture;

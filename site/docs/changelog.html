@@ -13,7 +13,9 @@
 <h1>Changelog</h1>
 <h2>Unreleased</h2>
 <ul><li>Shrink estimate: <code>filemind shrink estimate</code> and the Overview “Shrinkable” tile measure, by sampling and compressing a few KB per file, what APFS compression, lossless JPEG XL/PNG and cold-project archives could reclaim. </li>
-<li>Shrink tier 1: <em>Shrink</em> suggestions compress cold text, code and raw-format files in place with APFS transparent compression — a journaled <code>Rewrite</code> step that is read back and hash-checked before it counts, survives a crash at any point, and undoes in place. <code>filemind shrink info &lt;path&gt;</code> shows a file's on-disk state.</li></ul>
+<li>Shrink tier 1: <em>Shrink</em> suggestions compress cold text, code and raw-format files in place with APFS transparent compression — a journaled <code>Rewrite</code> step that is read back and hash-checked before it counts, survives a crash at any point, and undoes in place. <code>filemind shrink info &lt;path&gt;</code> shows a file's on-disk state.</li>
+<li>Recovery runs before every plan, apply and undo, not only at agent start — a transaction another process left unfinished is settled instead of blocking with “recover it first”.</li>
+<li>Shrink tier 3: <em>Archive</em> suggestions pack a cold project into one compressed file under <code>~/FileMind Archive</code> — content-defined chunks deduplicated across archives, zstd with dictionaries trained on your own files, every member decoded and hash-checked <em>before</em> the original folder goes to Trash. Search still finds every file inside (with a Restore button); <code>filemind archive list|show|verify|restore</code>.</li></ul>
 <h2>0.2.0 — beta 1</h2>
 <ul><li>Signed, notarized macOS app with the agent and CLI bundled; Start at login; in-app updates.</li>
 <li>Automate mode with the seven-day preview, three tier-0 rule kinds, pause on conflict.</li>

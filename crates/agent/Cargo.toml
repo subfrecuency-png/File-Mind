@@ -28,6 +28,8 @@ directories.workspace = true
 rusqlite.workspace = true
 ureq = { version = "3", features = ["json"] }
 
+walkdir.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 filemind-adapter-macos = { path = "../adapter-macos" }
 libc.workspace = true

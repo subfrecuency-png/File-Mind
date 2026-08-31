@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const STALE_DAYS: i64 = 90;
+/// An archive suggestion needs at least this much on-disk saving.
+const ARCHIVE_MIN_SAVING: u64 = 10 << 20;
 /// A folder needs this many files before an identical twin is worth a suggestion.
 const FOLDER_DUP_MIN_FILES: u64 = 5;
 
@@ -484,6 +486,46 @@ impl Db {
                         now
                     ])?;
                     n += 1;
+                }
+            }
+            // Shrink tier 3: one archive suggestion per cold project the
+            // estimate measured. Works on every platform (the pack is ours).
+            if let Some(est) = self.shrink_estimate()? {
+                let tiers = est["tiers"].as_array().cloned().unwrap_or_default();
+                if let Some(t3) = tiers.iter().find(|t| t["kind"] == "cold_archive") {
+                    for p in t3["projects"].as_array().cloned().unwrap_or_default() {
+                        let Some(folder) = p["root_path"].as_str() else {
+                            continue;
+                        };
+                        let saving = p["saving_bytes"].as_u64().unwrap_or(0);
+                        let bytes = p["bytes"].as_u64().unwrap_or(0);
+                        if saving < ARCHIVE_MIN_SAVING {
+                            continue;
+                        }
+                        let name = p["name"].as_str().unwrap_or("project").to_string();
+                        let end = p["end_ts"].as_i64().unwrap_or(0);
+                        let months = ((now - end) / (30 * 86_400)).max(1);
+                        up.execute(params![
+                            "archive_cold_project",
+                            format!("archive:{}", p["project_id"]),
+                            json!({
+                                "project_id": p["project_id"], "name": name, "folder": folder,
+                                "files": p["files"], "bytes": bytes, "saving": saving
+                            })
+                            .to_string(),
+                            format!(
+                                "{name} has not been touched in {months} month{} — pack it ({} in {} files) into a verified compressed archive, reclaiming about {}. Search still finds every file inside; restore is one command. The original goes to Trash only after every file in the archive is decoded and checked.",
+                                if months == 1 { "" } else { "s" },
+                                health::human(bytes),
+                                p["files"].as_u64().unwrap_or(0),
+                                health::human(saving)
+                            ),
+                            saving as i64,
+                            1i64,
+                            now
+                        ])?;
+                        n += 1;
+                    }
                 }
             }
         }
