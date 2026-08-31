@@ -447,6 +447,11 @@ fn compress_suggestion_flows_from_estimate_to_undo() {
     std::env::set_var("XDG_DATA_HOME", home.join(".local/share"));
     let root = home.join("Documents");
     std::fs::create_dir_all(root.join("logs")).unwrap();
+    // canonical BEFORE any path is recorded: on macOS the tempdir sits
+    // behind the /var → /private/var symlink, and the scanner stores the
+    // canonical spelling — a pre-canonical `paths` list would then miss
+    // the adapter's state map even though everything worked
+    let root = root.canonicalize().unwrap();
     let mut paths = Vec::new();
     for i in 0..8 {
         let p = root.join(format!("logs/day{i}.log"));
@@ -456,7 +461,6 @@ fn compress_suggestion_flows_from_estimate_to_undo() {
     }
     let fresh = root.join("logs/today.log");
     std::fs::write(&fresh, text(20_000, "today")).unwrap();
-    let root = root.canonicalize().unwrap();
 
     let db = Db::open_in_memory().unwrap();
     db.add_root(&root).unwrap();
