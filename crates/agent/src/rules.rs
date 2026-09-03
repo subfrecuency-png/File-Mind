@@ -535,6 +535,7 @@ pub fn tick(adapter: &dyn OsAdapter, db: &Db) -> Result<Vec<TickOutcome>> {
             done: rep.done,
             failed: rep.failed,
             state: state.as_str().to_string(),
+            archive: None,
         };
         db.record_automation_run(
             rule.rule_id,

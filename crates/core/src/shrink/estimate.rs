@@ -172,6 +172,10 @@ pub const MIN_FILE_BYTES: u64 = 4096;
 pub const COLD_AGE_DAYS: i64 = 30;
 /// Files sampled per bucket. 48 × 3 windows × 64 KiB ≈ 9 MB read per bucket.
 pub const SAMPLES_PER_BUCKET: usize = 48;
+/// Extra samples per cold project, so each project's archive saving is
+/// measured on its OWN files — a project of already-compressed renders must
+/// not inherit the ratio of somebody else's source tree.
+pub const SAMPLES_PER_PROJECT: usize = 16;
 /// One sampling window.
 pub const WINDOW_BYTES: usize = 64 * 1024;
 /// Windows per sampled file (head, middle, tail).
@@ -435,6 +439,17 @@ pub struct ProjectEstimate {
     pub files: u64,
     pub bytes: u64,
     pub saving_bytes: u64,
+    /// This project's own sampled ratio (1.0 = incompressible).
+    #[serde(default = "one")]
+    pub ratio: f64,
+    /// `false` when no file of the project could be probed and the ratio
+    /// fell back to the bucket averages.
+    #[serde(default)]
+    pub measured: bool,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 /// One tier in the report.
@@ -518,6 +533,8 @@ pub struct Estimator {
     buckets: HashMap<BucketKey, Bucket>,
     /// (project, category) → (files, bytes)
     project_cats: HashMap<(i64, String), (u64, u64)>,
+    /// per cold project: its own weighted reservoir
+    project_sample: HashMap<i64, Vec<(f64, PathBuf, u64)>>,
     files_seen: u64,
     bytes_seen: u64,
     samples_per_bucket: usize,
@@ -530,6 +547,7 @@ impl Estimator {
             rng: Rng(seed | 1),
             buckets: HashMap::new(),
             project_cats: HashMap::new(),
+            project_sample: HashMap::new(),
             files_seen: 0,
             bytes_seen: 0,
             samples_per_bucket: SAMPLES_PER_BUCKET,
@@ -556,6 +574,21 @@ impl Estimator {
                 .or_default();
             e.0 += 1;
             e.1 += f.size;
+            // the project's own reservoir (same A-Res scheme as below)
+            let u = self.rng.next_f64();
+            let akey = u.powf(1.0 / (f.size.max(1) as f64));
+            let s = self.project_sample.entry(pid).or_default();
+            if s.len() < SAMPLES_PER_PROJECT {
+                s.push((akey, f.path.to_path_buf(), f.size));
+            } else if let Some((i, _)) = s
+                .iter()
+                .enumerate()
+                .min_by(|a, c| a.1 .0.total_cmp(&c.1 .0))
+            {
+                if s[i].0 < akey {
+                    s[i] = (akey, f.path.to_path_buf(), f.size);
+                }
+            }
         }
         let k = self.samples_per_bucket;
         let b = self.buckets.entry(key).or_default();
@@ -588,9 +621,10 @@ impl Estimator {
             .collect()
     }
 
-    /// Number of sampled files across buckets (for progress bars).
+    /// Number of sampled files across buckets and projects (for progress bars).
     pub fn sample_count(&self) -> usize {
-        self.buckets.values().map(|b| b.sample.len()).sum()
+        self.buckets.values().map(|b| b.sample.len()).sum::<usize>()
+            + self.project_sample.values().map(Vec::len).sum::<usize>()
     }
 
     /// Probe every sample with `probe` (return `None` to skip an unreadable
@@ -666,6 +700,27 @@ impl Estimator {
             let saving_bytes: u64 = buckets.iter().map(|b| b.saving_bytes).sum();
             let mut projects_out = Vec::new();
             if kind == Kind::Archive {
+                // each project's own ratio, from its own sampled files —
+                // a folder of already-compressed renders must report ~1.0
+                // even when other cold projects compress well
+                let mut own: HashMap<i64, f64> = HashMap::new();
+                for (pid, sample) in &self.project_sample {
+                    let mut probes = Vec::new();
+                    for (_, p, s) in sample {
+                        if let Some(pr) = probe(p, *s) {
+                            if pr.bytes > 0 {
+                                probes.push(pr);
+                            }
+                        }
+                    }
+                    if !probes.is_empty() {
+                        sampled_files += probes.len() as u64;
+                        sampled_bytes += probes.iter().map(|p| p.bytes).sum::<u64>();
+                        let r = probes.iter().map(|p| p.ratio(Kind::Archive)).sum::<f64>()
+                            / probes.len() as f64;
+                        own.insert(*pid, if r > INCOMPRESSIBLE_RATIO { 1.0 } else { r });
+                    }
+                }
                 let mut per: HashMap<i64, (u64, u64, u64)> = HashMap::new();
                 for ((pid, cat), (files, bytes)) in &self.project_cats {
                     let r = ratios
@@ -680,8 +735,20 @@ impl Estimator {
                     e.1 += bytes;
                     e.2 += ((*bytes as f64) * (1.0 - r)).round() as u64;
                 }
-                for (pid, (files, bytes, saving)) in per {
+                for (pid, (files, bytes, cat_saving)) in per {
                     let p = projects.iter().find(|p| p.project_id == pid);
+                    let (ratio, saving_bytes, measured) = match own.get(&pid) {
+                        Some(r) => (*r, ((bytes as f64) * (1.0 - r)).round() as u64, true),
+                        None => (
+                            if bytes == 0 {
+                                1.0
+                            } else {
+                                1.0 - cat_saving as f64 / bytes as f64
+                            },
+                            cat_saving,
+                            false,
+                        ),
+                    };
                     projects_out.push(ProjectEstimate {
                         project_id: pid,
                         name: p
@@ -691,11 +758,19 @@ impl Estimator {
                         end_ts: p.map(|p| p.end_ts).unwrap_or(0),
                         files,
                         bytes,
-                        saving_bytes: saving,
+                        saving_bytes,
+                        ratio,
+                        measured,
                     });
                 }
                 projects_out.sort_by_key(|b| std::cmp::Reverse(b.saving_bytes));
             }
+            // the archive tier's own total follows the per-project numbers
+            let saving_bytes = if kind == Kind::Archive && !projects_out.is_empty() {
+                projects_out.iter().map(|p| p.saving_bytes).sum()
+            } else {
+                saving_bytes
+            };
             tiers.push(TierEstimate {
                 tier: kind.tier(),
                 kind: kind.key().into(),
@@ -838,6 +913,57 @@ mod tests {
         );
     }
 
+    /// A cold project of already-compressed files must report ~no saving
+    /// even when another cold project in the same buckets compresses well —
+    /// the Precomp lesson: measure each project on its own files.
+    #[test]
+    fn incompressible_project_does_not_inherit_a_neighbours_ratio() {
+        let now = 1_800_000_000;
+        let mut e = Estimator::new(now, 7);
+        for i in 0..10 {
+            let pt = PathBuf::from(format!("/Users/r/old/text/{i}.csv"));
+            let mut f = file(&pt, "csv", 100_000, 400, "data");
+            f.cold_project = Some(1);
+            e.add(&f);
+            let pr = PathBuf::from(format!("/Users/r/old/renders/{i}.exr"));
+            let mut f = file(&pr, "exr", 100_000, 400, "data");
+            f.cold_project = Some(2);
+            e.add(&f);
+        }
+        let projects = vec![
+            ProjectIn {
+                project_id: 1,
+                name: "text".into(),
+                root_path: Some("/Users/r/old/text".into()),
+                end_ts: now - 400 * DAY,
+            },
+            ProjectIn {
+                project_id: 2,
+                name: "renders".into(),
+                root_path: Some("/Users/r/old/renders".into()),
+                end_ts: now - 400 * DAY,
+            },
+        ];
+        let est = e.finish(&projects, |p, size| {
+            let n = size.min(1000);
+            let compressible = p.to_string_lossy().contains("/text/");
+            Some(Probe {
+                bytes: n,
+                zlib: if compressible { n / 4 } else { n },
+                zstd: if compressible { n / 5 } else { n },
+            })
+        });
+        let t3 = est.tiers.iter().find(|t| t.kind == "cold_archive").unwrap();
+        let text = t3.projects.iter().find(|p| p.name == "text").unwrap();
+        let renders = t3.projects.iter().find(|p| p.name == "renders").unwrap();
+        assert!(text.measured && renders.measured);
+        assert_eq!(text.saving_bytes, 800_000);
+        assert_eq!(renders.saving_bytes, 0, "ratio {}", renders.ratio);
+        assert_eq!(renders.ratio, 1.0);
+        // the tier total follows the honest per-project numbers
+        assert_eq!(t3.saving_bytes, 800_000);
+    }
+
     #[test]
     fn estimate_applies_sampled_ratio_to_bucket_totals() {
         let now = 1_800_000_000;
@@ -858,7 +984,9 @@ mod tests {
             f.cold_project = Some(3);
             e.add(&f);
         }
-        assert_eq!(e.sample_count(), 4 + 1 + 4);
+        // bucket reservoirs (4 code + 1 media + 4 data) plus the cold
+        // project's own reservoir (all 5 of its files fit)
+        assert_eq!(e.sample_count(), 4 + 1 + 4 + 5);
         let projects = vec![ProjectIn {
             project_id: 3,
             name: "old proj".into(),
@@ -891,6 +1019,9 @@ mod tests {
         assert_eq!(t3.projects.len(), 1);
         assert_eq!(t3.projects[0].name, "old proj");
         assert_eq!(t3.projects[0].saving_bytes, 800_000);
+        // and the ratio came from the project's own files, not the bucket
+        assert!(t3.projects[0].measured);
+        assert!((t3.projects[0].ratio - 0.2).abs() < 1e-9);
         assert_eq!(est.saving_bytes, 1_500_000 + 220_000 + 800_000);
         assert!(est.headline().starts_with("Shrink could reclaim ~"));
         assert!(

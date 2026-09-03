@@ -243,6 +243,9 @@ pub struct Applied {
     pub done: usize,
     pub failed: usize,
     pub state: String,
+    /// For archive suggestions: what the pack actually achieved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive: Option<crate::archive::Built>,
 }
 
 /// Validate, gate on mode/approval, execute, and record effects.
@@ -278,7 +281,7 @@ pub fn apply(
     }
     // Cold archives: pack and verify BEFORE the transaction touches the
     // original tree. A failure here leaves everything exactly as it was.
-    let mut archived: Option<(String, PathBuf)> = None;
+    let mut archived: Option<(crate::archive::Built, PathBuf)> = None;
     if let Some(s) = db
         .list_suggestions("proposed", usize::MAX)?
         .into_iter()
@@ -292,7 +295,7 @@ pub fn apply(
                 tracing::info!(done, total, "archiving");
             })?;
             db.archive_set_txn(&b.archive_id, &m.txn_id)?;
-            archived = Some((b.archive_id, folder));
+            archived = Some((b, folder));
         }
     }
     let rep = txn::execute(adapter, db, &mut m, CrashPoint::Never)?;
@@ -300,11 +303,11 @@ pub fn apply(
     // executed manifest carries trashed_to; prefer it for effects
     db.note_txn_effects(&m, &states)?;
     let _ = m2;
-    if let Some((archive_id, folder)) = archived {
+    if let Some((b, folder)) = &archived {
         if rep.failed == 0 {
             // rows the Trash step marked `trashed` become `archived`, so
             // search keeps finding them inside the pack
-            db.mark_archived(&archive_id, &folder)?;
+            db.mark_archived(&b.archive_id, folder)?;
         }
     }
     if rep.failed == 0 {
@@ -315,6 +318,7 @@ pub fn apply(
         done: rep.done,
         failed: rep.failed,
         state: state.as_str().to_string(),
+        archive: archived.map(|(b, _)| b),
     })
 }
 

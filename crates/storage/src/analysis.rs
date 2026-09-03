@@ -510,15 +510,21 @@ impl Db {
                             format!("archive:{}", p["project_id"]),
                             json!({
                                 "project_id": p["project_id"], "name": name, "folder": folder,
-                                "files": p["files"], "bytes": bytes, "saving": saving
+                                "files": p["files"], "bytes": bytes, "saving": saving,
+                                "ratio": p["ratio"], "measured": p["measured"]
                             })
                             .to_string(),
                             format!(
-                                "{name} has not been touched in {months} month{} — pack it ({} in {} files) into a verified compressed archive, reclaiming about {}. Search still finds every file inside; restore is one command. The original goes to Trash only after every file in the archive is decoded and checked.",
+                                "{name} has not been touched in {months} month{} — pack it ({} in {} files) into a verified compressed archive, reclaiming about {}{}. Search still finds every file inside; restore is one command. The original goes to Trash only after every file in the archive is decoded and checked.",
                                 if months == 1 { "" } else { "s" },
                                 health::human(bytes),
                                 p["files"].as_u64().unwrap_or(0),
-                                health::human(saving)
+                                health::human(saving),
+                                if p["measured"].as_bool() == Some(true) {
+                                    " (measured on this project's own files)"
+                                } else {
+                                    ""
+                                }
                             ),
                             saving as i64,
                             1i64,

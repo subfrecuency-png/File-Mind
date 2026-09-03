@@ -1494,6 +1494,17 @@ fn run() -> Result<()> {
                     v["failed"],
                     v["txn_id"].as_str().unwrap_or("?")
                 );
+                if let Some(a) = v.get("archive").filter(|a| !a.is_null()) {
+                    let raw = a["bytes_raw"].as_u64().unwrap_or(0);
+                    let stored = a["bytes_stored"].as_u64().unwrap_or(0);
+                    println!(
+                        "archive {}: {} packed into {} on disk ({} reclaimed)",
+                        a["archive_id"].as_str().unwrap_or("?"),
+                        human_bytes(raw),
+                        human_bytes(stored),
+                        human_bytes(raw.saturating_sub(stored))
+                    );
+                }
             }
             Some(SuggestCmd::Dismiss { id }) => {
                 let ok = if let Some(mut a) = agent() {
