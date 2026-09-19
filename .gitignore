@@ -12,3 +12,6 @@
 /_to_delete/
 /apps/desktop/src-tauri/target
 /apps/desktop/src-tauri/gen
+
+# local agent scratch
+/Claude outputs/
