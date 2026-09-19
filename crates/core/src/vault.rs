@@ -446,28 +446,30 @@ pub fn seal_file_to(
     Ok(hash)
 }
 
-pub fn unseal_file_from(object_path: &Path, dest: &Path, mk: &[u8; 32]) -> Result<[u8; 32]> {
-    let bytes = std::fs::read(object_path)?;
-    let obj = decode(&bytes)?;
-    let pt = unseal_bytes(&obj, mk)?;
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if dest.exists() {
-        return Err(CoreError::DestinationExists(dest.to_path_buf()));
-    }
-    let part = dest.with_file_name(format!(
+/// Sidecar next to `dest` that [`unseal_file_to_part`] writes. The transaction
+/// manager then places it with [`crate::OsAdapter::rename_no_clobber`].
+pub fn unseal_sidecar(dest: &Path) -> PathBuf {
+    dest.with_file_name(format!(
         ".{}.unseal-part",
         dest.file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default()
-    ));
-    std::fs::write(&part, &pt)?;
-    if dest.exists() {
-        let _ = std::fs::rename(&part, part.with_extension("unseal-part.stale"));
-        return Err(CoreError::DestinationExists(dest.to_path_buf()));
+    ))
+}
+
+/// Decrypt `object_path` into `part` only. Does **not** occupy `dest` —
+/// callers must `rename_no_clobber(part, dest)`.
+pub fn unseal_file_to_part(object_path: &Path, part: &Path, mk: &[u8; 32]) -> Result<[u8; 32]> {
+    let bytes = std::fs::read(object_path)?;
+    let obj = decode(&bytes)?;
+    let pt = unseal_bytes(&obj, mk)?;
+    if let Some(parent) = part.parent() {
+        std::fs::create_dir_all(parent)?;
     }
-    std::fs::rename(&part, dest)?;
+    if part.exists() {
+        let _ = std::fs::rename(part, part.with_extension("unseal-part.stale"));
+    }
+    std::fs::write(part, &pt)?;
     Ok(obj.header.plaintext_blake3)
 }
 
@@ -576,5 +578,26 @@ mod tests {
         assert!(unhex("zz").is_none());
         let k = [0xab; 32];
         assert_eq!(unhex(&hex(&k)).unwrap(), k);
+    }
+
+    #[test]
+    fn unseal_writes_sidecar_not_dest() {
+        let mk = MemoryKeystore::random()
+            .unwrap()
+            .get_or_create_mk()
+            .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("server.pem");
+        let obj = tmp.path().join("x.fmseal");
+        let dest = tmp.path().join("restored.pem");
+        let body = b"-----BEGIN FAKE-RSA PRIVATE KEY-----\nFILEMIND_TEST_FIXTURE\n";
+        std::fs::write(&src, body).unwrap();
+        seal_file_to(&src, &obj, "seal_sidecar", Sensitivity::Credential, &mk).unwrap();
+        let part = unseal_sidecar(&dest);
+        let hash = unseal_file_to_part(&obj, &part, &mk).unwrap();
+        assert_eq!(hash, *blake3::hash(body).as_bytes());
+        assert!(part.exists(), "plaintext lands on the sidecar");
+        assert!(!dest.exists(), "dest is left for rename_no_clobber");
+        assert_eq!(std::fs::read(&part).unwrap(), body);
     }
 }

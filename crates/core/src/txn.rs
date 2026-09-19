@@ -525,6 +525,30 @@ pub struct ExecReport {
     pub conflicts: usize,
 }
 
+/// Decrypt to a sidecar, then place it with [`OsAdapter::rename_no_clobber`].
+/// Leftover sidecar is trashed (or renamed aside) if the dest is occupied.
+fn unseal_via_rename(
+    adapter: &dyn OsAdapter,
+    object_path: &Path,
+    dest: &Path,
+    mk: &[u8; 32],
+) -> Result<[u8; 32]> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let part = crate::vault::unseal_sidecar(dest);
+    let hash = crate::vault::unseal_file_to_part(object_path, &part, mk)?;
+    match adapter.rename_no_clobber(&part, dest) {
+        Ok(()) => Ok(hash),
+        Err(e) => {
+            if part.exists() && adapter.move_to_trash(&part).is_err() {
+                let _ = std::fs::rename(&part, part.with_extension("unseal-part.stale"));
+            }
+            Err(e)
+        }
+    }
+}
+
 fn do_step(adapter: &dyn OsAdapter, s: &Step) -> Result<Option<PathBuf>> {
     match s {
         Step::Move { from, to, .. } => {
@@ -580,7 +604,7 @@ fn do_step(adapter: &dyn OsAdapter, s: &Step) -> Result<Option<PathBuf>> {
             ..
         } => {
             let mk = adapter.vault_master_key()?;
-            let hash = crate::vault::unseal_file_from(object_path, dest, &mk)?;
+            let hash = unseal_via_rename(adapter, object_path, dest, &mk)?;
             if let Some(want) = hash_before {
                 let got = crate::vault::plaintext_blake3_hex(&hash);
                 if got != *want {
@@ -1016,7 +1040,7 @@ pub fn undo(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> Res
             }
             if !restored && object_path.exists() {
                 match adapter.vault_master_key() {
-                    Ok(mk) => match crate::vault::unseal_file_from(object_path, path, &mk) {
+                    Ok(mk) => match unseal_via_rename(adapter, object_path, path, &mk) {
                         Ok(hash) => {
                             if let Some(h) = hash_before {
                                 if crate::vault::plaintext_blake3_hex(&hash) != *h {
