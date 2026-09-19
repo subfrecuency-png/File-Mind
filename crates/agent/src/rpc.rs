@@ -11,6 +11,7 @@ use anyhow::Result;
 use filemind_core::OsAdapter;
 use filemind_storage::Db;
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -929,6 +930,12 @@ fn start_job(ctx: &Context, kind: &str, p: &Value) -> Result<crate::jobs::JobInf
     }
 }
 
+#[cfg(not(unix))]
+fn start_job(_ctx: &Context, _kind: &str, _p: &Value) -> Result<crate::jobs::JobInfo> {
+    anyhow::bail!("background jobs are not available on this platform yet")
+}
+
+#[cfg(unix)]
 pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use std::os::unix::net::UnixListener;
     let sock = socket_path(&ctx.db_path);
