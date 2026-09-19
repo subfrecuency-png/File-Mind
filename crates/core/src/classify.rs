@@ -8,6 +8,7 @@
 //! (layer 2) plugs in behind the same [`Classification`] type in Phase 7.
 
 use crate::model::{Category, Classification, ClassificationSource};
+use crate::vault::Sensitivity;
 use std::path::Path;
 
 /// A rule learned from a user correction.
@@ -253,20 +254,84 @@ pub enum Sensitive {
 }
 
 const SECRET_NAMES: &[&str] = &[
-    ".env",
     ".netrc",
     ".npmrc",
     ".pypirc",
-    "id_rsa",
-    "id_ed25519",
     ".htpasswd",
-    "credentials",
-    "secrets",
     ".pgpass",
     "keychain",
 ];
 
+/// Public material that shares a prefix with private-key names (the V0
+/// `id_ed25519.pub` false positive) or is certificate-only.
+fn is_public_material(name: &str, ext: &str) -> bool {
+    ext == "pub" || ext == "crt" || name.ends_with(".pub")
+}
+
+fn under_ssh_dir(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == ".ssh" || c.as_os_str() == ".SSH")
+}
+
+fn ssh_config_or_public(name: &str) -> bool {
+    matches!(
+        name,
+        "known_hosts"
+            | "known_hosts.old"
+            | "authorized_keys"
+            | "authorized_keys2"
+            | "config"
+            | "config.d"
+    ) || name.starts_with("known_hosts")
+}
+
+/// `id_rsa*` / `id_ed25519*` private names. `*.pub` is excluded first.
+fn ssh_private_name(name: &str) -> bool {
+    if name.ends_with(".pub") {
+        return false;
+    }
+    name == "id_rsa"
+        || name.starts_with("id_rsa")
+        || name == "id_ed25519"
+        || name.starts_with("id_ed25519")
+}
+
+fn is_env_name(name: &str, ext: &str) -> bool {
+    name == ".env" || name.starts_with(".env.") || ext == "env"
+}
+
 pub fn sensitive_by_name(path: &Path) -> Option<Sensitive> {
+    vault_tier0(path, None).map(|s| match s {
+        Sensitivity::Credential | Sensitivity::Secret => {
+            if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "pem" | "key" | "p12" | "pfx" | "ppk"
+                )
+            }) || ssh_private_name(
+                &path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default(),
+            ) {
+                Sensitive::PrivateKey
+            } else {
+                Sensitive::SecretsFile
+            }
+        }
+        Sensitivity::Financial => Sensitive::CardNumber,
+        Sensitivity::Pii => Sensitive::NationalId,
+        Sensitivity::Health | Sensitivity::Other => Sensitive::SecretsFile,
+    })
+}
+
+/// Tier-0 Vault seal-candidate detector: deterministic, no LLM.
+///
+/// Positives: `*.pem`, `.env` / `.env.*` / `*.env`, `id_rsa*` / `id_ed25519*`
+/// private names, `~/.ssh/` private material, `BEGIN … PRIVATE KEY`.
+/// Near-misses: ordinary docs, `*.crt` / `*.pub`, `BEGIN CERTIFICATE` only,
+/// prose mentioning “private key”.
+pub fn vault_tier0(path: &Path, text: Option<&str>) -> Option<Sensitivity> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
@@ -275,20 +340,91 @@ pub fn sensitive_by_name(path: &Path) -> Option<Sensitive> {
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
+
+    if is_public_material(&name, &ext) {
+        return None;
+    }
+
+    if ssh_private_name(&name) {
+        return Some(Sensitivity::Credential);
+    }
+    if under_ssh_dir(path) && !ssh_config_or_public(&name) {
+        return Some(Sensitivity::Credential);
+    }
+    if is_env_name(&name, &ext) {
+        return Some(Sensitivity::Credential);
+    }
+    if name.contains("credentials") {
+        return Some(Sensitivity::Credential);
+    }
+    if name.contains("secret") {
+        return Some(Sensitivity::Secret);
+    }
+    if name == "wallet.dat" || ext == "kdbx" {
+        return Some(Sensitivity::Secret);
+    }
     if SECRET_NAMES
         .iter()
-        .any(|s| name == *s || name.starts_with(&format!("{s}.")) || name.ends_with(s))
+        .any(|s| name == *s || name.starts_with(&format!("{s}.")))
     {
-        return Some(Sensitive::SecretsFile);
+        return Some(Sensitivity::Secret);
     }
     if [
         "pem", "key", "p12", "pfx", "keystore", "jks", "asc", "gpg", "ppk",
     ]
     .contains(&ext.as_str())
     {
-        return Some(Sensitive::PrivateKey);
+        return Some(Sensitivity::Credential);
+    }
+
+    if let Some(t) = text {
+        return vault_tier0_text(t);
     }
     None
+}
+
+/// Body signals only. `BEGIN CERTIFICATE` without a private key is a miss.
+/// Prose that merely mentions “private key” is a miss.
+pub fn vault_tier0_text(text: &str) -> Option<Sensitivity> {
+    let t = head(text, 64 * 1024);
+    if t.contains("-----BEGIN") && t.contains("PRIVATE KEY") {
+        return Some(Sensitivity::Credential);
+    }
+    // AWS AKIA in a small text file (design signal). Require the well-known
+    // prefix plus enough following material so a mention of "AKIA" is not enough.
+    if let Some(i) = t.find("AKIA") {
+        let tail: String = t[i..]
+            .chars()
+            .take(24)
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if tail.len() >= 16 {
+            return Some(Sensitivity::Credential);
+        }
+    }
+    None
+}
+
+/// Read at most `max` bytes and run [`vault_tier0`]. Used by Seal to confirm
+/// a candidate when the file is not yet classified.
+pub fn vault_tier0_file(path: &Path) -> Option<Sensitivity> {
+    if let Some(s) = vault_tier0(path, None) {
+        return Some(s);
+    }
+    let text = peek_text(path, 64 * 1024);
+    vault_tier0(path, text.as_deref())
+}
+
+fn peek_text(path: &Path, max: usize) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; max];
+    let n = f.read(&mut buf).ok()?;
+    buf.truncate(n);
+    if buf.contains(&0) {
+        return None;
+    }
+    String::from_utf8(buf).ok()
 }
 
 /// At most `max` bytes of `text`, never splitting a multi-byte character.
@@ -508,7 +644,7 @@ mod tests {
         );
         assert_eq!(sensitive_by_name(Path::new("/p/notes.txt")), None);
         assert_eq!(
-            sensitive_by_text("-----BEGIN RSA PRIVATE KEY-----\nMIIE"),
+            sensitive_by_text("-----BEGIN FAKE-RSA PRIVATE KEY-----\nMIIE"),
             Some(Sensitive::PrivateKey)
         );
         assert_eq!(
@@ -532,6 +668,69 @@ mod tests {
             sensitive_by_text("just an ordinary letter about 2025 plans"),
             None
         );
+        // V0 gap: public SSH keys must not look like private material
+        assert_eq!(
+            sensitive_by_name(Path::new("/p/id_ed25519.pub")),
+            None,
+            "id_ed25519.pub is a near-miss"
+        );
+        assert_eq!(sensitive_by_name(Path::new("/p/id_rsa.pub")), None);
+        assert_eq!(sensitive_by_name(Path::new("/p/server.crt")), None);
+        assert_eq!(
+            sensitive_by_name(Path::new("/Users/x/.ssh/id_rsa")),
+            Some(Sensitive::PrivateKey)
+        );
+        assert_eq!(
+            sensitive_by_name(Path::new("/Users/x/.ssh/id_rsa.pub")),
+            None
+        );
+        assert_eq!(
+            sensitive_by_text("-----BEGIN CERTIFICATE-----\nMII"),
+            None,
+            "CERTIFICATE-only is not a private key"
+        );
+        assert_eq!(
+            vault_tier0_text("This README mentions a \"private key\" in prose only."),
+            None
+        );
+    }
+
+    #[test]
+    fn vault_tier0_matrix_fixtures() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/secrets");
+        let positives = [
+            "positives/server.pem",
+            "positives/.env",
+            "positives/.env.local",
+            "positives/id_rsa",
+            "positives/id_ed25519",
+            "positives/dot_ssh/.ssh/id_rsa",
+            "positives/aws_akia_stub.env",
+            "positives/credentials",
+        ];
+        for rel in positives {
+            let p = root.join(rel);
+            let text = std::fs::read_to_string(&p).ok();
+            let hit = vault_tier0(&p, text.as_deref()).or_else(|| vault_tier0_file(&p));
+            assert!(hit.is_some(), "expected seal candidate: {rel}");
+        }
+        let misses = [
+            "near_misses/notes.txt",
+            "near_misses/invoice.txt",
+            "near_misses/id_ed25519.pub",
+            "near_misses/server.crt",
+            "near_misses/readme_mentions_private_key.md",
+        ];
+        for rel in misses {
+            let p = root.join(rel);
+            let text = std::fs::read_to_string(&p).ok();
+            let hit = vault_tier0(&p, text.as_deref());
+            assert!(hit.is_none(), "must not seal {rel}: {hit:?}");
+            assert!(
+                sensitive_by_name(&p).is_none(),
+                "sensitive_by_name must also miss {rel}"
+            );
+        }
     }
 }
 

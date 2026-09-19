@@ -13,6 +13,7 @@ use std::path::Path;
 
 pub const SERVICE: &str = "ai.filemind";
 pub const ACCOUNT: &str = "db-key";
+pub const VAULT_ACCOUNT: &str = "vault-mk";
 pub const KEY_FILE: &str = "filemind.key";
 
 fn hex(bytes: &[u8]) -> String {
@@ -88,6 +89,28 @@ pub fn db_key_hex(db_dir: &Path) -> Result<String> {
     Ok(hex(&db_key(db_dir)?))
 }
 
+/// Vault MK: env override, then a 0600 file (`vault-mk.key`). The macOS
+/// adapter prefers the Keychain item `vault-mk` (separate from `db-key`).
+/// Never log or persist this in SQLite.
+pub fn vault_mk(dir: &Path) -> Result<[u8; 32]> {
+    if let Ok(v) = std::env::var("FILEMIND_VAULT_MK") {
+        return unhex(&v).context("FILEMIND_VAULT_MK must be 64 hex characters");
+    }
+    let file = dir.join("vault-mk.key");
+    if let Ok(s) = std::fs::read_to_string(&file) {
+        return unhex(&s).with_context(|| format!("{} is malformed", file.display()));
+    }
+    let k = random_key()?;
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(&file, hex(&k))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(k)
+}
+
 #[cfg(target_os = "macos")]
 fn platform_get(_db_dir: &Path) -> Result<[u8; 32]> {
     use anyhow::bail;
@@ -142,5 +165,14 @@ mod tests {
         assert!(unhex("zz").is_none());
         let p = pragma_value(&k);
         assert!(p.starts_with("\"x'") && p.ends_with("'\"") && p.len() == 64 + 5);
+    }
+
+    #[test]
+    fn vault_mk_env_override_never_writes_a_key_file() {
+        std::env::set_var("FILEMIND_VAULT_MK", "cd".repeat(32));
+        let tmp = tempfile::tempdir().unwrap();
+        let k = vault_mk(tmp.path()).unwrap();
+        assert_eq!(k, [0xcd; 32]);
+        assert!(!tmp.path().join("vault-mk.key").exists());
     }
 }

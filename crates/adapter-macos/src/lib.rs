@@ -9,6 +9,7 @@ pub mod apfs;
 mod notify_bridge;
 pub mod spotlight;
 pub mod trash;
+pub mod vault_keychain;
 
 use chrono::{DateTime, TimeZone, Utc};
 use filemind_core::adapter::*;
@@ -215,6 +216,12 @@ impl OsAdapter for MacAdapter {
         .flatten()
         .map(Path::to_path_buf)
         .collect()
+    }
+
+    fn vault_master_key(&self) -> Result<[u8; 32]> {
+        let dir = self.vault_objects_dir()?;
+        let data = dir.parent().unwrap_or(dir.as_path());
+        vault_keychain::vault_master_key(data)
     }
 }
 

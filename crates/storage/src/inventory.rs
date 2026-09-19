@@ -61,6 +61,7 @@ fn status_str(s: FileStatus) -> &'static str {
         FileStatus::Moved => "moved",
         FileStatus::Trashed => "trashed",
         FileStatus::Archived => "archived",
+        FileStatus::Sealed => "sealed",
         FileStatus::Missing => "missing",
     }
 }

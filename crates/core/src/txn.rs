@@ -133,20 +133,45 @@ pub enum Step {
         #[serde(default)]
         bytes_after: Option<u64>,
     },
+    /// Vault Seal: write `fmseal/1` ciphertext, then `move_to_trash` plaintext.
+    /// Undo restores plaintext (trash put-back, else decrypt) after BLAKE3
+    /// verify and trashes the object.
+    Seal {
+        path: PathBuf,
+        seal_id: String,
+        object_path: PathBuf,
+        sensitivity: String,
+        hash_before: Option<String>,
+        #[serde(default)]
+        trashed_to: Option<PathBuf>,
+    },
+    /// Vault Unseal: decrypt to `dest` via `rename_no_clobber`, then trash
+    /// the ciphertext. Undo reseals if the restored file still matches.
+    Unseal {
+        seal_id: String,
+        object_path: PathBuf,
+        dest: PathBuf,
+        hash_before: Option<String>,
+        #[serde(default)]
+        object_trashed_to: Option<PathBuf>,
+    },
 }
 
 impl Step {
     pub fn source(&self) -> &Path {
         match self {
             Step::Move { from, .. } => from,
-            Step::Trash { path, .. } | Step::Rewrite { path, .. } => path,
+            Step::Trash { path, .. } | Step::Rewrite { path, .. } | Step::Seal { path, .. } => path,
+            Step::Unseal { object_path, .. } => object_path,
         }
     }
     pub fn hash_before(&self) -> Option<&str> {
         match self {
             Step::Move { hash_before, .. }
             | Step::Trash { hash_before, .. }
-            | Step::Rewrite { hash_before, .. } => hash_before.as_deref(),
+            | Step::Rewrite { hash_before, .. }
+            | Step::Seal { hash_before, .. }
+            | Step::Unseal { hash_before, .. } => hash_before.as_deref(),
         }
     }
     /// Short verb for logs and previews.
@@ -155,6 +180,8 @@ impl Step {
             Step::Move { .. } => "move",
             Step::Trash { .. } => "trash",
             Step::Rewrite { .. } => "rewrite",
+            Step::Seal { .. } => "seal",
+            Step::Unseal { .. } => "unseal",
         }
     }
 }
@@ -228,6 +255,18 @@ impl Manifest {
                     if bytes_after.is_some() { "" } else { "~" },
                     crate::health::human(bytes_after.unwrap_or(0)),
                 ),
+                Step::Seal {
+                    path,
+                    seal_id,
+                    sensitivity,
+                    ..
+                } => format!(
+                    "{i:>3}  SEAL   {}\n       →      vault {seal_id} ({sensitivity})",
+                    path.display()
+                ),
+                Step::Unseal { dest, seal_id, .. } => {
+                    format!("{i:>3}  UNSEAL {seal_id}\n       →      {}", dest.display())
+                }
             };
             out.push_str(&line);
             out.push('\n');
@@ -269,6 +308,8 @@ pub enum CrashPoint {
     BeforeOp(usize),
     /// Die after the disk operation, before the `done` mark.
     AfterOp(usize),
+    /// Seal only: die after ciphertext is written, before plaintext is trashed.
+    AfterSealWrite(usize),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -300,8 +341,12 @@ pub fn validate_with(
 ) -> Result<Vec<String>> {
     let mut problems = Vec::new();
     let protected = adapter.protected_roots();
-    let inside = |p: &Path| approved_roots.iter().any(|r| p.starts_with(r));
-    let is_protected = |p: &Path| protected.iter().any(|r| p.starts_with(r));
+    let inside = |p: &Path| {
+        crate::vault::is_vault_object_path(p) || approved_roots.iter().any(|r| p.starts_with(r))
+    };
+    let is_protected = |p: &Path| {
+        !crate::vault::is_vault_object_path(p) && protected.iter().any(|r| p.starts_with(r))
+    };
     let mut seen_targets: Vec<PathBuf> = Vec::new();
 
     for (i, s) in m.steps.iter_mut().enumerate() {
@@ -325,7 +370,10 @@ pub fn validate_with(
                 src.display()
             )),
             Some(e) => {
-                if e.kind == crate::model::EntryKind::File && hash_contents {
+                if e.kind == crate::model::EntryKind::File
+                    && hash_contents
+                    && !matches!(s, Step::Unseal { .. })
+                {
                     match hash_file(&src) {
                         Ok(h) => match s.hash_before() {
                             Some(prev) if prev != h => problems.push(format!(
@@ -336,7 +384,9 @@ pub fn validate_with(
                             None => match s {
                                 Step::Move { hash_before, .. }
                                 | Step::Trash { hash_before, .. }
-                                | Step::Rewrite { hash_before, .. } => *hash_before = Some(h),
+                                | Step::Rewrite { hash_before, .. }
+                                | Step::Seal { hash_before, .. }
+                                | Step::Unseal { hash_before, .. } => *hash_before = Some(h),
                             },
                         },
                         Err(e) => {
@@ -404,6 +454,43 @@ pub fn validate_with(
                 }
             }
         }
+        if let Step::Seal { object_path, .. } = s {
+            if object_path.exists() {
+                problems.push(format!(
+                    "step {i}: vault object {} already exists",
+                    object_path.display()
+                ));
+            }
+        }
+        if let Step::Unseal {
+            dest, object_path, ..
+        } = s
+        {
+            if !inside(dest) {
+                problems.push(format!(
+                    "step {i}: destination {} is outside every approved root",
+                    dest.display()
+                ));
+            }
+            if is_protected(dest) {
+                problems.push(format!(
+                    "step {i}: destination {} is protected",
+                    dest.display()
+                ));
+            }
+            if dest.exists() {
+                problems.push(format!(
+                    "step {i}: destination {} already exists",
+                    dest.display()
+                ));
+            }
+            if adapter.stat(object_path)?.is_none() {
+                problems.push(format!(
+                    "step {i}: ciphertext {} is missing",
+                    object_path.display()
+                ));
+            }
+        }
     }
     Ok(problems)
 }
@@ -461,6 +548,57 @@ fn do_step(adapter: &dyn OsAdapter, s: &Step) -> Result<Option<PathBuf>> {
             adapter.rewrite(path, method)?;
             Ok(None)
         }
+        Step::Seal {
+            path,
+            seal_id,
+            object_path,
+            sensitivity,
+            trashed_to,
+            ..
+        } => {
+            if !object_path.exists() {
+                let mk = adapter.vault_master_key()?;
+                let label = crate::vault::Sensitivity::parse(sensitivity)
+                    .unwrap_or(crate::vault::Sensitivity::Other);
+                crate::vault::seal_file_to(path, object_path, seal_id, label, &mk)?;
+            }
+            // Crash hook is checked by the caller after do_step; the mid-seal
+            // point is signaled by leaving plaintext in place when
+            // `AfterSealWrite` is set — see `execute`.
+            let target = match trashed_to {
+                Some(t) => t.clone(),
+                None => adapter.trash_target(path)?,
+            };
+            let receipt = adapter.move_to_trash_at(path, &target)?;
+            Ok(receipt.trashed_to)
+        }
+        Step::Unseal {
+            object_path,
+            dest,
+            hash_before,
+            object_trashed_to,
+            ..
+        } => {
+            let mk = adapter.vault_master_key()?;
+            let hash = crate::vault::unseal_file_from(object_path, dest, &mk)?;
+            if let Some(want) = hash_before {
+                let got = crate::vault::plaintext_blake3_hex(&hash);
+                if got != *want {
+                    // dest was written; do not leave a wrong file in place
+                    let _ = adapter.move_to_trash(dest);
+                    return Err(CoreError::Other(anyhow::anyhow!(
+                        "Unseal BLAKE3 mismatch for {}",
+                        dest.display()
+                    )));
+                }
+            }
+            let target = match object_trashed_to {
+                Some(t) => t.clone(),
+                None => adapter.trash_target(object_path)?,
+            };
+            let receipt = adapter.move_to_trash_at(object_path, &target)?;
+            Ok(receipt.trashed_to)
+        }
     }
 }
 
@@ -515,9 +653,21 @@ pub fn execute(
         let planned_target = match &mut m.steps[i] {
             Step::Trash {
                 path, trashed_to, ..
+            }
+            | Step::Seal {
+                path, trashed_to, ..
             } => {
                 let t = adapter.trash_target(path)?;
                 *trashed_to = Some(t.clone());
+                Some(t)
+            }
+            Step::Unseal {
+                object_path,
+                object_trashed_to,
+                ..
+            } => {
+                let t = adapter.trash_target(object_path)?;
+                *object_trashed_to = Some(t.clone());
                 Some(t)
             }
             Step::Move { .. } | Step::Rewrite { .. } => None,
@@ -526,17 +676,42 @@ pub fn execute(
         if crash == CrashPoint::BeforeOp(i) {
             return Err(CoreError::Other(SimulatedCrash.into()));
         }
+        if crash == CrashPoint::AfterSealWrite(i) {
+            if let Step::Seal {
+                path,
+                seal_id,
+                object_path,
+                sensitivity,
+                ..
+            } = &m.steps[i]
+            {
+                if !object_path.exists() {
+                    let mk = adapter.vault_master_key()?;
+                    let label = crate::vault::Sensitivity::parse(sensitivity)
+                        .unwrap_or(crate::vault::Sensitivity::Other);
+                    crate::vault::seal_file_to(path, object_path, seal_id, label, &mk)?;
+                }
+            }
+            return Err(CoreError::Other(SimulatedCrash.into()));
+        }
         let outcome = do_step(adapter, &m.steps[i]).and_then(|t| {
             verify_rewrite(adapter, &mut m.steps[i])?;
             Ok(t)
         });
         match outcome {
             Ok(trashed_to) => {
-                if let Step::Trash {
-                    trashed_to: slot, ..
-                } = &mut m.steps[i]
-                {
-                    *slot = trashed_to.clone();
+                match &mut m.steps[i] {
+                    Step::Trash {
+                        trashed_to: slot, ..
+                    }
+                    | Step::Seal {
+                        trashed_to: slot, ..
+                    } => *slot = trashed_to.clone(),
+                    Step::Unseal {
+                        object_trashed_to: slot,
+                        ..
+                    } => *slot = trashed_to.clone(),
+                    _ => {}
                 }
                 if crash == CrashPoint::AfterOp(i) {
                     return Err(CoreError::Other(SimulatedCrash.into()));
@@ -641,6 +816,30 @@ pub fn recover(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> 
                             }
                         }
                     },
+                }
+            }
+            Step::Seal {
+                path, object_path, ..
+            } => {
+                let src = adapter.stat(path)?.is_some();
+                let obj = adapter.stat(object_path)?.is_some();
+                match (src, obj) {
+                    (true, false) => StepState::Planned, // never started
+                    (true, true) => StepState::Conflict, // ciphertext beside plaintext; pause
+                    (false, true) => StepState::Done,
+                    (false, false) => StepState::Conflict,
+                }
+            }
+            Step::Unseal {
+                object_path, dest, ..
+            } => {
+                let obj = adapter.stat(object_path)?.is_some();
+                let out = adapter.stat(dest)?.is_some();
+                match (obj, out) {
+                    (true, false) => StepState::Planned,
+                    (true, true) => StepState::Conflict,
+                    (false, true) => StepState::Done,
+                    (false, false) => StepState::Conflict,
                 }
             }
         };
@@ -764,6 +963,162 @@ pub fn undo(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> Res
             }
             continue;
         }
+        if let Step::Seal {
+            path,
+            object_path,
+            hash_before,
+            trashed_to,
+            ..
+        } = &m.steps[i]
+        {
+            if path.exists() {
+                rep.skipped.push(format!(
+                    "step {i}: {} is occupied now; left in place",
+                    path.display()
+                ));
+                continue;
+            }
+            let mut restored = false;
+            if let Some(t) = trashed_to {
+                if adapter.stat(t)?.is_some() {
+                    if let Some(h) = hash_before {
+                        if t.is_file() {
+                            match hash_file(t) {
+                                Ok(now) if now != *h => {
+                                    rep.skipped.push(format!(
+                                        "step {i}: {} was modified after the seal; left in place",
+                                        t.display()
+                                    ));
+                                    continue;
+                                }
+                                Err(e) => {
+                                    rep.skipped.push(format!(
+                                        "step {i}: cannot read {}: {e}",
+                                        t.display()
+                                    ));
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    match adapter.rename_no_clobber(t, path) {
+                        Ok(()) => restored = true,
+                        Err(e) => {
+                            rep.skipped.push(format!("step {i}: {e}"));
+                            continue;
+                        }
+                    }
+                }
+            }
+            if !restored && object_path.exists() {
+                match adapter.vault_master_key() {
+                    Ok(mk) => match crate::vault::unseal_file_from(object_path, path, &mk) {
+                        Ok(hash) => {
+                            if let Some(h) = hash_before {
+                                if crate::vault::plaintext_blake3_hex(&hash) != *h {
+                                    let _ = adapter.move_to_trash(path);
+                                    rep.skipped
+                                        .push(format!("step {i}: Unseal fallback BLAKE3 mismatch"));
+                                    continue;
+                                }
+                            }
+                            restored = true;
+                        }
+                        Err(e) => {
+                            rep.skipped.push(format!("step {i}: {e}"));
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        rep.skipped
+                            .push(format!("step {i}: Vault master key unavailable ({e})"));
+                        continue;
+                    }
+                }
+            }
+            if !restored {
+                rep.skipped.push(format!(
+                    "step {i}: cannot restore {} (trash and ciphertext missing)",
+                    path.display()
+                ));
+                continue;
+            }
+            if object_path.exists() {
+                if let Err(e) = adapter.move_to_trash(object_path) {
+                    rep.skipped.push(format!(
+                        "step {i}: restored plaintext; leftover ciphertext: {e}"
+                    ));
+                }
+            }
+            journal.set_step_state(txn_id, i, StepState::Undone, None)?;
+            rep.restored += 1;
+            continue;
+        }
+        if let Step::Unseal {
+            dest,
+            object_path,
+            hash_before,
+            object_trashed_to,
+            ..
+        } = &m.steps[i]
+        {
+            if dest.exists() {
+                if let Some(h) = hash_before {
+                    match hash_file(dest) {
+                        Ok(now) if now != *h => {
+                            rep.skipped.push(format!(
+                                "step {i}: {} was modified after Unseal; left in place",
+                                dest.display()
+                            ));
+                            continue;
+                        }
+                        Err(e) => {
+                            rep.skipped
+                                .push(format!("step {i}: cannot read {}: {e}", dest.display()));
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if object_path.exists() {
+                rep.skipped.push(format!(
+                    "step {i}: {} is occupied now; left in place",
+                    object_path.display()
+                ));
+                continue;
+            }
+            match object_trashed_to {
+                Some(t) if adapter.stat(t)?.is_some() => {
+                    if let Some(parent) = object_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    if let Err(e) = adapter.rename_no_clobber(t, object_path) {
+                        rep.skipped.push(format!("step {i}: {e}"));
+                        continue;
+                    }
+                }
+                _ => {
+                    rep.skipped
+                        .push(format!("step {i}: ciphertext is no longer in Trash"));
+                    continue;
+                }
+            }
+            if dest.exists() {
+                if let Err(e) = adapter.move_to_trash(dest) {
+                    rep.skipped.push(format!(
+                        "step {i}: restored ciphertext; leftover plaintext: {e}"
+                    ));
+                }
+            }
+            journal.set_step_state(txn_id, i, StepState::Undone, None)?;
+            rep.restored += 1;
+            continue;
+        }
         let (current, original, hash) = match &m.steps[i] {
             Step::Move {
                 from,
@@ -784,7 +1139,9 @@ pub fn undo(adapter: &dyn OsAdapter, journal: &dyn Journal, txn_id: &str) -> Res
                     continue;
                 }
             },
-            Step::Rewrite { .. } => unreachable!("handled above"),
+            Step::Rewrite { .. } | Step::Seal { .. } | Step::Unseal { .. } => {
+                unreachable!("handled above")
+            }
         };
         if adapter.stat(&current)?.is_none() {
             rep.skipped.push(format!(

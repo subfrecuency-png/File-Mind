@@ -12,6 +12,7 @@ pub mod projects;
 pub mod rules;
 pub mod semantic;
 pub mod shrink;
+pub mod vault;
 
 pub use analysis::{DupGroup, Suggestion, VersionChain};
 pub use folderdups::FolderDup;
@@ -57,6 +58,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0010_archive",
         include_str!("../migrations/0010_archive.sql"),
     ),
+    ("0011_vault", include_str!("../migrations/0011_vault.sql")),
 ];
 
 /// Default per-user database location:
@@ -358,14 +360,14 @@ mod tests {
         let p = tmp.path().join("t.db");
         {
             let db = Db::open(&p).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 10);
+            assert_eq!(db.schema_version().unwrap(), 11);
             assert_eq!(
                 db.get_setting("mode").unwrap(),
                 Some(serde_json::json!("observe"))
             );
         }
         let db = Db::open(&p).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 10);
+        assert_eq!(db.schema_version().unwrap(), 11);
         let c = db.counts().unwrap();
         assert_eq!((c.roots, c.files, c.transactions), (0, 0, 0));
     }

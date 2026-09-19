@@ -22,6 +22,7 @@ pub mod rules;
 pub mod scanner;
 pub mod shrink;
 pub mod txn;
+pub mod vault;
 pub mod vectors;
 pub mod versions;
 pub mod watch;

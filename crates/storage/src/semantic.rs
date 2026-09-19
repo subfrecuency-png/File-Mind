@@ -76,6 +76,11 @@ pub struct FileCard {
     pub status: String,
     /// `archive:<id>#<rel>` when the file lives inside a cold archive.
     pub location: Option<String>,
+    /// `open` | `sealed` (Vault). Absent on pre-V0 rows → treat as open.
+    #[serde(default)]
+    pub custody: Option<String>,
+    #[serde(default)]
+    pub sensitivity: Option<String>,
 }
 
 impl Db {
@@ -239,7 +244,7 @@ impl Db {
         let mut st = self.conn.prepare(
             "SELECT f.file_id FROM files_fts
              JOIN files f ON f.rowid = files_fts.rowid
-             WHERE files_fts MATCH ?1 AND f.status IN ('present', 'archived')
+             WHERE files_fts MATCH ?1 AND f.status IN ('present', 'archived', 'sealed')
              ORDER BY bm25(files_fts, 8.0, 3.0, 1.0) LIMIT ?2",
         )?;
         let rows = st.query_map(params![fts_expr, limit as i64], |r| r.get::<_, String>(0))?;
@@ -249,7 +254,7 @@ impl Db {
     /// Files matching only the structured part of a query (no text), newest first.
     pub fn filter_only_ids(&self, p: &Parsed, limit: usize) -> Result<Vec<String>> {
         let mut sql = String::from(
-            "SELECT f.file_id FROM files f WHERE f.status IN ('present', 'archived') AND f.kind = 'file'",
+            "SELECT f.file_id FROM files f WHERE f.status IN ('present', 'archived', 'sealed') AND f.kind = 'file'",
         );
         let mut args: Vec<rusqlite::types::Value> = Vec::new();
         push_filters(p, &mut sql, &mut args);
@@ -268,9 +273,10 @@ impl Db {
         }
         let mut out = Vec::with_capacity(ids.len());
         let mut sql = String::from(
-            "SELECT f.file_id, f.path, f.name, f.ext, f.size, f.mtime, c.category, f.sensitive, f.status, f.location
+            "SELECT f.file_id, f.path, f.name, f.ext, f.size, f.mtime, c.category, f.sensitive, f.status, f.location,
+                    f.custody, f.sensitivity
              FROM files f LEFT JOIN classifications c ON c.file_id = f.file_id AND c.source = 'rule'
-             WHERE f.file_id = ? AND f.status IN ('present', 'archived')",
+             WHERE f.file_id = ? AND f.status IN ('present', 'archived', 'sealed')",
         );
         let mut extra: Vec<rusqlite::types::Value> = Vec::new();
         push_filters(p, &mut sql, &mut extra);
@@ -291,6 +297,8 @@ impl Db {
                         sensitive: r.get::<_, i64>(7)? != 0,
                         status: r.get(8)?,
                         location: r.get(9)?,
+                        custody: r.get(10)?,
+                        sensitivity: r.get(11)?,
                     })
                 })
                 .optional()?;

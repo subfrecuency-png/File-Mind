@@ -177,6 +177,25 @@ pub trait OsAdapter: Send + Sync {
     fn on_disk_bytes(&self, path: &Path) -> Result<u64> {
         Ok(std::fs::symlink_metadata(path)?.len())
     }
+
+    /// Vault master key (32 bytes). Default: `FILEMIND_VAULT_MK` or a 0600
+    /// file under the FileMind data dir. macOS overrides this with Keychain
+    /// (`vault-mk`, WhenUnlockedThisDeviceOnly). Never log the return value.
+    fn vault_master_key(&self) -> Result<[u8; 32]> {
+        if let Some(k) = crate::vault::mk_from_env()? {
+            return Ok(k);
+        }
+        let dir = crate::vault::default_objects_dir()?
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        crate::vault::file_mk(&dir)
+    }
+
+    /// Directory for `*.fmseal` objects. Overridable with `FILEMIND_VAULT_DIR`.
+    fn vault_objects_dir(&self) -> Result<PathBuf> {
+        crate::vault::default_objects_dir()
+    }
 }
 
 /// True if `path` is `root` or lies beneath it (lexically; callers canonicalise first).

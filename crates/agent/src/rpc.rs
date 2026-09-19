@@ -751,6 +751,40 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
         .into_iter()
         .map(|(id, st)| json!({"txn_id": id, "state": st}))
         .collect::<Vec<_>>())),
+        "vault.seal" => {
+            let path = PathBuf::from(
+                p.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("path required"))?,
+            );
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            Ok(json!(crate::vault::seal(
+                ctx.adapter.as_ref(),
+                &db,
+                &path,
+                approved,
+                filemind_core::txn::CrashPoint::Never
+            )?))
+        }
+        "vault.unseal" => {
+            let target = p
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| p.get("seal_id").and_then(Value::as_str))
+                .ok_or_else(|| anyhow::anyhow!("path or seal_id required"))?;
+            let to = p.get("to").and_then(Value::as_str).map(PathBuf::from);
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            Ok(json!(crate::vault::unseal(
+                ctx.adapter.as_ref(),
+                &db,
+                target,
+                to.as_deref(),
+                approved,
+                filemind_core::txn::CrashPoint::Never
+            )?))
+        }
+        "vault.list" => Ok(json!(crate::vault::list(&db)?)),
+        "vault.status" => Ok(json!(crate::vault::status(ctx.adapter.as_ref(), &db)?)),
         other => anyhow::bail!("unknown method {other}"),
     }
 }

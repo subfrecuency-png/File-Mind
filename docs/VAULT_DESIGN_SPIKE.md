@@ -1,6 +1,6 @@
 # FileMind Vault — Design Spike
 
-**Status:** Draft spike (2026-09-17)  
+**Status:** V0 implemented (2026-09-19) — see `VAULT_V0_ACCEPTANCE.md`  
 **Owner intent:** Deprioritize Shrink-as-headline; elevate **Protect** via cryptographically sealing private files (keys, credentials, sensitive docs), with a path to **quantum-safe** key wrap.  
 **Partners:** FileMind engine (index, txn, classify) · File Mind Grok (steward / triage) · Quantum-safety work (crypto policy)
 
@@ -173,14 +173,14 @@ Update site/changelog language: Shrink = storage; Vault = trust.
 ## 13. Spike deliverables (engineering checklist)
 
 - [ ] `docs/VAULT_DESIGN_SPIKE.md` (this doc)
-- [ ] Schema: `custody_state`, `seal_objects`, `vault_audit` migrations
-- [ ] `vault seal|unseal|list|status` CLI
-- [ ] Keychain MK bootstrap + unit tests with mock keystore
-- [ ] Txn steps Seal/Unseal wired to undo
-- [ ] Classifier tier-0 rules + fixtures (`testdata/secrets/*` fake keys only)
-- [ ] Agent RPC: `vault.*` (MCP later)
+- [x] Schema: `custody`, `seal_objects`, `vault_audit` migrations (`0011_vault`)
+- [x] `vault seal|unseal|list|status` CLI
+- [x] Keychain MK bootstrap + unit tests with mock keystore
+- [x] Txn steps Seal/Unseal wired to undo
+- [x] Classifier tier-0 rules + fixtures (`testdata/secrets/*` fake keys only)
+- [x] Agent RPC: `vault.*` (MCP later)
 - [ ] Crypto review note for Phase B hybrid wrap (link quantum-safety project)
-- [ ] Manual test: Seal PEM → search finds stub only → Unseal → hash matches → undo
+- [x] Tests: Seal PEM → search metadata only → Unseal → hash matches → undo
 
 ## 14. Success criteria
 
