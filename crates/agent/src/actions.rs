@@ -187,6 +187,18 @@ fn fingerprint(m: &Manifest) -> String {
                 h.update(b"\0");
                 h.update(path.to_string_lossy().as_bytes());
             }
+            Step::Seal { path, seal_id, .. } => {
+                h.update(b"S");
+                h.update(seal_id.as_bytes());
+                h.update(b"\0");
+                h.update(path.to_string_lossy().as_bytes());
+            }
+            Step::Unseal { dest, seal_id, .. } => {
+                h.update(b"U");
+                h.update(seal_id.as_bytes());
+                h.update(b"\0");
+                h.update(dest.to_string_lossy().as_bytes());
+            }
         }
         h.update(b"\n");
     }
@@ -383,6 +395,12 @@ pub fn undo(adapter: &dyn OsAdapter, db: &Db, txn_id: &str) -> Result<Undone> {
                          SELECT file_id, ?2, 'restored', path, NULL, 'txn' FROM files WHERE path = ?1",
                         rusqlite::params![path.to_string_lossy(), now],
                     )?;
+                }
+                Step::Seal { path, seal_id, .. } => {
+                    let _ = db.mark_seal_undone(path, seal_id);
+                }
+                Step::Unseal { dest, seal_id, .. } => {
+                    let _ = db.mark_unseal_undone(dest, seal_id);
                 }
             }
         }

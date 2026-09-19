@@ -165,6 +165,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ArchiveCmd,
     },
+    /// Seal sensitive files (Protect). Not Archive.
+    Vault {
+        #[command(subcommand)]
+        cmd: VaultCmd,
+    },
     /// Manage the background agent.
     Agent {
         #[command(subcommand)]
@@ -296,6 +301,31 @@ enum ShrinkCmd {
     },
     /// What one file looks like on disk: compressed or not, bytes used.
     Info { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum VaultCmd {
+    /// Encrypt a file and move plaintext to Trash (undoable).
+    Seal {
+        path: PathBuf,
+        /// Approve without the interactive prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Restore a sealed file (bit-identical check).
+    Unseal {
+        /// Original path or seal id.
+        target: String,
+        /// Restore somewhere other than the original path.
+        #[arg(long)]
+        to: Option<PathBuf>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Sealed items: path, label, sealed time — no bodies.
+    List,
+    /// Vault mode, sealed count, candidate count, keystore.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -550,7 +580,9 @@ fn print_search(v: &Value) {
             fmt_ts(h["mtime"].as_i64().unwrap_or(0)),
             human_bytes(h["size"].as_u64().unwrap_or(0)),
             h["category"].as_str().unwrap_or("-"),
-            if h["sensitive"].as_bool() == Some(true) {
+            if h["status"].as_str() == Some("sealed") || h["custody"].as_str() == Some("sealed") {
+                "  Sealed"
+            } else if h["sensitive"].as_bool() == Some(true) {
                 "  ⚠ sensitive"
             } else {
                 ""
@@ -2078,6 +2110,119 @@ fn run() -> Result<()> {
                         Some(None) => "indexed, no rewrite recorded".to_string(),
                         Some(Some(m)) => format!("indexed, rewritten with {m} by FileMind"),
                     }
+                );
+            }
+        },
+
+        Cmd::Vault { cmd } => match cmd {
+            VaultCmd::Seal { path, yes } => {
+                if !yes {
+                    eprint!(
+                        "Seal this file? Plaintext moves to Trash; only ciphertext stays. You can Unseal later. [y/N] "
+                    );
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    if !matches!(line.trim(), "y" | "Y" | "yes") {
+                        println!("not sealed");
+                        return Ok(());
+                    }
+                }
+                let v = rpc(
+                    adapter.as_ref(),
+                    "vault.seal",
+                    json!({"path": path, "approved": true}),
+                )?;
+                if v["failed"].as_u64().unwrap_or(0) > 0 {
+                    bail!(
+                        "Couldn't Seal — {}",
+                        v["state"].as_str().unwrap_or("failed")
+                    );
+                }
+                println!(
+                    "Sealed {} from {}.",
+                    v["sensitivity"].as_str().unwrap_or("item"),
+                    PathBuf::from(v["path"].as_str().unwrap_or("."))
+                        .parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                );
+                println!(
+                    "undo with `filemind undo {}`",
+                    v["txn_id"].as_str().unwrap_or("?")
+                );
+            }
+            VaultCmd::Unseal { target, to, yes } => {
+                if !yes {
+                    eprint!("Unlock Vault to restore this file? [y/N] ");
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    if !matches!(line.trim(), "y" | "Y" | "yes") {
+                        println!("not unsealed");
+                        return Ok(());
+                    }
+                }
+                let mut params = json!({"path": target, "approved": true});
+                if let Some(to) = to {
+                    params["to"] = json!(to);
+                }
+                let v = rpc(adapter.as_ref(), "vault.unseal", params)?;
+                if v["failed"].as_u64().unwrap_or(0) > 0 {
+                    bail!(
+                        "Couldn't Unseal — {}",
+                        v["state"].as_str().unwrap_or("failed")
+                    );
+                }
+                println!(
+                    "Restored {} — bit-identical check OK.",
+                    v["dest"].as_str().unwrap_or("file")
+                );
+                println!(
+                    "undo with `filemind undo {}`",
+                    v["txn_id"].as_str().unwrap_or("?")
+                );
+            }
+            VaultCmd::List => {
+                let v = rpc(adapter.as_ref(), "vault.list", json!({}))?;
+                let items = v.as_array().cloned().unwrap_or_default();
+                if items.is_empty() {
+                    println!("nothing sealed");
+                }
+                for it in items {
+                    let when = it["sealed_ts"]
+                        .as_i64()
+                        .and_then(|x| chrono::DateTime::from_timestamp(x, 0))
+                        .map(|x| {
+                            x.with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M")
+                                .to_string()
+                        })
+                        .unwrap_or_default();
+                    let label = it["sensitivity"].as_str().unwrap_or("other");
+                    let shown = match label {
+                        "credential" => "Likely credential",
+                        "secret" => "Likely secret",
+                        "pii" => "Likely personal info",
+                        "financial" => "Likely financial",
+                        "health" => "Likely health-related",
+                        _ => "Sensitive (review)",
+                    };
+                    println!(
+                        "  {}  {:<22}  {}",
+                        when,
+                        shown,
+                        it["original_path"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+            VaultCmd::Status => {
+                let v = rpc(adapter.as_ref(), "vault.status", json!({}))?;
+                println!(
+                    "vault  mode {}  sealed {}  candidates {}  mk {}  objects {}",
+                    v["mode"].as_str().unwrap_or("?"),
+                    v["sealed"],
+                    v["candidates"],
+                    v["mk"].as_str().unwrap_or("?"),
+                    v["objects"].as_str().unwrap_or("?")
                 );
             }
         },

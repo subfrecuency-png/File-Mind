@@ -67,7 +67,7 @@ fn rule_classifier_hits_target_and_search_finds_content() {
     .unwrap();
     std::fs::write(
         root.join("Documents/server.pem"),
-        "-----BEGIN RSA PRIVATE KEY-----\nMIIE...",
+        "-----BEGIN FAKE-RSA PRIVATE KEY-----\nMIIE...",
     )
     .unwrap();
     let root = root.canonicalize().unwrap();

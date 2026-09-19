@@ -16,6 +16,9 @@ flate2.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
+# OSX_10_15: data-protection Keychain so vault-mk can set
+# kSecAttrAccessibleWhenUnlockedThisDeviceOnly via SecAccessControl.
+security-framework = { version = "3", features = ["OSX_10_15"] }
 
 [dev-dependencies]
 tempfile.workspace = true

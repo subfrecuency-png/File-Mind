@@ -6,4 +6,4 @@ Every file includes a FAKE / FILEMIND_TEST_FIXTURE marker.
 - `positives/` — tier-0 classifier / seal candidates
 - `near_misses/` — must not seal
 
-Copy into the Vault V0 PR under `testdata/secrets/` when the cloud PR opens.
+Used by `filemind-core` classifier tests and `filemind-agent` Vault V0 integration tests.

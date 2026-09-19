@@ -36,6 +36,11 @@ jobs:
       - run: |
           if grep -rnE 'fs::(remove_file|remove_dir|remove_dir_all)\b' crates/core/src crates/agent/src crates/cli/src | grep -v 'filemind:own-file'; then
             echo "::error::Hard delete found outside the OS adapter layer"; exit 1; fi
+      # Vault hygiene: PEM-like material only under testdata/ (FAKE fixtures).
+      - run: |
+          if grep -rlnE --exclude-dir=testdata --exclude-dir=target --exclude-dir=.git --exclude-dir=node_modules \
+            -e '-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----' .; then
+            echo "::error::PEM-like material found outside testdata/"; exit 1; fi
 
   desktop:
     name: desktop app (macOS)

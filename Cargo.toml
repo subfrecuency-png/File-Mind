@@ -29,6 +29,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
 blake3 = "1"
+chacha20poly1305 = "0.10"
+aes = "0.8"
+aes-kw = "0.2"
+getrandom = "0.2"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 chrono = { version = "0.4", features = ["serde"] }

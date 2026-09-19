@@ -439,7 +439,16 @@ pub fn ask(db: &Db, engine: &Engine, adapter: &dyn AiAdapter, question: &str) ->
             .parent()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        let excerpt = if h.card.sensitive {
+        let excerpt = if h.card.status == "sealed" || h.card.custody.as_deref() == Some("sealed") {
+            let label = h
+                .card
+                .sensitivity
+                .as_deref()
+                .and_then(filemind_core::vault::Sensitivity::parse)
+                .map(|s| s.label())
+                .unwrap_or("Sealed");
+            format!("{label} · metadata only")
+        } else if h.card.sensitive {
             String::new()
         } else {
             db.text_head(&h.card.file_id)?

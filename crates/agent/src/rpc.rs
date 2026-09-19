@@ -11,6 +11,7 @@ use anyhow::Result;
 use filemind_core::OsAdapter;
 use filemind_storage::Db;
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -751,6 +752,40 @@ fn dispatch(ctx: &Context, method: &str, p: &Value) -> Result<Value> {
         .into_iter()
         .map(|(id, st)| json!({"txn_id": id, "state": st}))
         .collect::<Vec<_>>())),
+        "vault.seal" => {
+            let path = PathBuf::from(
+                p.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("path required"))?,
+            );
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            Ok(json!(crate::vault::seal(
+                ctx.adapter.as_ref(),
+                &db,
+                &path,
+                approved,
+                filemind_core::txn::CrashPoint::Never
+            )?))
+        }
+        "vault.unseal" => {
+            let target = p
+                .get("path")
+                .and_then(Value::as_str)
+                .or_else(|| p.get("seal_id").and_then(Value::as_str))
+                .ok_or_else(|| anyhow::anyhow!("path or seal_id required"))?;
+            let to = p.get("to").and_then(Value::as_str).map(PathBuf::from);
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            Ok(json!(crate::vault::unseal(
+                ctx.adapter.as_ref(),
+                &db,
+                target,
+                to.as_deref(),
+                approved,
+                filemind_core::txn::CrashPoint::Never
+            )?))
+        }
+        "vault.list" => Ok(json!(crate::vault::list(&db)?)),
+        "vault.status" => Ok(json!(crate::vault::status(ctx.adapter.as_ref(), &db)?)),
         other => anyhow::bail!("unknown method {other}"),
     }
 }
@@ -895,6 +930,12 @@ fn start_job(ctx: &Context, kind: &str, p: &Value) -> Result<crate::jobs::JobInf
     }
 }
 
+#[cfg(not(unix))]
+fn start_job(_ctx: &Context, _kind: &str, _p: &Value) -> Result<crate::jobs::JobInfo> {
+    anyhow::bail!("background jobs are not available on this platform yet")
+}
+
+#[cfg(unix)]
 pub fn serve(ctx: Arc<Context>, stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use std::os::unix::net::UnixListener;
     let sock = socket_path(&ctx.db_path);

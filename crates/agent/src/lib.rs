@@ -21,4 +21,5 @@ pub mod scheduler;
 pub mod semantic;
 pub mod shrink;
 pub mod telemetry;
+pub mod vault;
 pub mod watcher;

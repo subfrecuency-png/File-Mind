@@ -1,7 +1,9 @@
+//! Pipeline tests need the macOS adapter (Unix CI).
+#![cfg(unix)]
+
 use filemind_agent::pipeline::*;
 use filemind_storage::Db;
 
-#[cfg(unix)]
 #[test]
 fn scan_persists_and_tracks_rename_across_runs() {
     let adapter = filemind_adapter_macos::MacAdapter;
@@ -46,7 +48,6 @@ fn scan_persists_and_tracks_rename_across_runs() {
     assert_eq!(hits[0].0, root.canonicalize().unwrap().join("b.txt"));
 }
 
-#[cfg(unix)]
 #[test]
 fn hard_links_get_their_own_identity() {
     let adapter = filemind_adapter_macos::MacAdapter;

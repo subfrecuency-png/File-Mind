@@ -17,6 +17,8 @@ pub enum FileStatus {
     Moved,
     Trashed,
     Archived,
+    /// Ciphertext at rest; metadata-only search. The plaintext is in Trash.
+    Sealed,
     Missing,
 }
 

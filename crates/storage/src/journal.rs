@@ -54,10 +54,22 @@ impl Db {
             if i < states.len() {
                 states[i] = StepState::parse(&s);
                 // for Trash steps the journal knows where the file went
-                if let (Step::Trash { trashed_to, .. }, Some(t)) = (&mut m.steps[i], to) {
-                    if trashed_to.is_none() {
-                        *trashed_to = Some(PathBuf::from(t));
+                match (&mut m.steps[i], to) {
+                    (Step::Trash { trashed_to, .. }, Some(t))
+                    | (Step::Seal { trashed_to, .. }, Some(t)) => {
+                        if trashed_to.is_none() {
+                            *trashed_to = Some(PathBuf::from(t));
+                        }
                     }
+                    (
+                        Step::Unseal {
+                            object_trashed_to, ..
+                        },
+                        Some(t),
+                    ) if object_trashed_to.is_none() => {
+                        *object_trashed_to = Some(PathBuf::from(t));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -107,6 +119,8 @@ impl Db {
     /// new path reconciled by the watcher/scan; trashed ones are marked here.
     pub fn note_txn_effects(&self, m: &Manifest, states: &[StepState]) -> Result<()> {
         let now = Utc::now().timestamp();
+        let mut seals: Vec<&Step> = Vec::new();
+        let mut unseals: Vec<&Step> = Vec::new();
         let tx = self.conn.unchecked_transaction()?;
         for (i, s) in m.steps.iter().enumerate() {
             if states.get(i) != Some(&StepState::Done) {
@@ -146,6 +160,8 @@ impl Db {
                         params![path.to_string_lossy(), method],
                     )?;
                 }
+                Step::Seal { .. } => seals.push(s),
+                Step::Unseal { .. } => unseals.push(s),
                 Step::Move { from, to, .. } => {
                     tx.execute(
                         "INSERT INTO file_events(file_id, ts, type, from_path, to_path, source)
@@ -164,6 +180,42 @@ impl Db {
             }
         }
         tx.commit()?;
+        for s in seals {
+            if let Step::Seal {
+                path,
+                seal_id,
+                object_path,
+                sensitivity,
+                hash_before,
+                ..
+            } = s
+            {
+                let file_id = self.file_id_of_path(path).ok().flatten();
+                let row = crate::vault::SealRow {
+                    seal_id: seal_id.clone(),
+                    file_id,
+                    original_path: path.clone(),
+                    original_name: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    object_path: object_path.clone(),
+                    sensitivity: sensitivity.clone(),
+                    plaintext_blake3: hash_before.clone().unwrap_or_default(),
+                    size: std::fs::metadata(object_path).map(|m| m.len()).unwrap_or(0),
+                    sealed_ts: now,
+                    format: filemind_core::vault::FORMAT.to_string(),
+                    txn_id: Some(m.txn_id.clone()),
+                    unsealed_ts: None,
+                };
+                self.mark_sealed(path, seal_id, sensitivity, &row)?;
+            }
+        }
+        for s in unseals {
+            if let Step::Unseal { dest, seal_id, .. } = s {
+                self.mark_unsealed_file(dest, seal_id)?;
+            }
+        }
         Ok(())
     }
 }
@@ -210,6 +262,14 @@ impl Journal for Db {
                 let (from, to) = match s {
                     Step::Move { from, to, .. } => (from.to_string_lossy().to_string(), Some(to.to_string_lossy().to_string())),
                     Step::Trash { path, .. } | Step::Rewrite { path, .. } => (path.to_string_lossy().to_string(), None),
+                    Step::Seal { path, object_path, .. } => (
+                        path.to_string_lossy().to_string(),
+                        Some(object_path.to_string_lossy().to_string()),
+                    ),
+                    Step::Unseal { object_path, dest, .. } => (
+                        object_path.to_string_lossy().to_string(),
+                        Some(dest.to_string_lossy().to_string()),
+                    ),
                 };
                 ins.execute(params![m.txn_id, i as i64, from, to, s.hash_before()])?;
             }
