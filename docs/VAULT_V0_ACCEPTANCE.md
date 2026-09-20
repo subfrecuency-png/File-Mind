@@ -25,7 +25,7 @@ Fail the PR if any unchecked item is missed or waved without Ryan + Leader sign-
 
 - [ ] Journaled via existing Manifest / Journal
 - [ ] Plaintext leaves folder only via `move_to_trash`
-- [ ] Restore uses `rename_no_clobber`
+- [ ] **Unseal restore** uses `rename_no_clobber` (must not overwrite an existing path)
 - [ ] Undo verifies BLAKE3 (bit-identical)
 
 ### 3. Key custody
